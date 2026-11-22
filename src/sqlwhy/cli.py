@@ -6,6 +6,7 @@ from pathlib import Path
 
 import duckdb
 
+from .audit import audit_rows
 from .demo import DEMOS, open_demo, trace_flat_counts
 from .engine import trace_row
 from .files import SAFE_CONFIG, open_tables
@@ -39,18 +40,21 @@ def _nonnegative_int(raw):
     return count
 
 
-def _parser(demo):
+def _parser(command):
+    demo, audit = command == "demo", command == "audit"
     names = "\n".join(f"  {name:<16} {description}" for name, (description, _) in DEMOS.items())
     examples = (
         "Examples\n"
         "  sqlwhy report.sql --db audit.duckdb --trace orders.id=42\n"
         "  sqlwhy report.sql --table orders=orders.csv --trace orders.id=42\n"
+        "  sqlwhy audit report.sql --db audit.duckdb --key orders.id --expect-rows 1\n"
         "  sqlwhy demo flat-counts --json\n\n"
     )
     parser = argparse.ArgumentParser(
-        prog="sqlwhy demo" if demo else "sqlwhy",
-        description="Trace a source row through the joins and WHERE clause of a SQL query.",
-        epilog=("" if demo else examples) + "Built-in demos\n" + names,
+        prog=f"sqlwhy {command}" if command else "sqlwhy",
+        description=("Check the report row count for every source key."
+                     if audit else "Trace a source row through the joins and WHERE clause of a SQL query."),
+        epilog=None if audit else ("" if demo else examples) + "Built-in demos\n" + names,
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     if demo:
@@ -61,12 +65,19 @@ def _parser(demo):
         inputs.add_argument("--db", type=Path, help="existing DuckDB file opened read-only")
         inputs.add_argument("--table", action="append", metavar="NAME=FILE",
                             help="local CSV or Parquet file to load as NAME (repeatable)")
-        parser.add_argument("--trace", required=True, metavar="KEY=VALUE", type=_trace_arg,
-                            help="source key and value (NULL for SQL NULL, double quotes for text)")
+        if audit:
+            parser.add_argument("--key", required=True, metavar="COLUMN", help="key column on the leftmost table")
+            parser.add_argument("--limit", metavar="N", type=_nonnegative_int, default=5,
+                                help="maximum number of violation examples (default: 5)")
+        else:
+            parser.add_argument("--trace", required=True, metavar="KEY=VALUE", type=_trace_arg,
+                                help="source key and value (NULL for SQL NULL, double quotes for text)")
     parser.add_argument("--json", action="store_true", help="print the result as JSON")
-    parser.add_argument("--expect", choices=STATUSES, help="exit 1 when the trace status differs")
-    parser.add_argument("--expect-rows", metavar="N", type=_nonnegative_int,
-                        help="exit 1 when the trace output row count differs")
+    if not audit:
+        parser.add_argument("--expect", choices=STATUSES, help="exit 1 when the trace status differs")
+    parser.add_argument("--expect-rows", metavar="N", type=_nonnegative_int, required=audit,
+                        help="exit 1 when any source key has a different report row count"
+                        if audit else "exit 1 when the trace output row count differs")
     return parser
 
 
@@ -109,33 +120,68 @@ def _show_flat_counts(result):
                 _show_stage(stage)
 
 
+def _show_audit(result):
+    expected = result["expected_rows"]
+    examples = result["examples"]
+    rows = "row" if expected == 1 else "rows"
+    print(f"Expected {expected} report {rows} per {result['key']}")
+    print(f"Source rows {result['source_rows']}  |  Source keys {result['source_keys']}"
+          f"  |  Report rows {result['report_rows']}")
+    print(f"Violations {result['violation_count']}  |  Examples shown {len(examples)}")
+    for trace in examples:
+        target = trace["target"]
+        source, *stages = trace["stages"]
+        print(f"\n{target['key']} = {_literal(target['value'])}  [expected {expected}, got {trace['output_rows']}]")
+        if source["after"] != expected:
+            print(f"  {source['clause']}  [source count already differs: {source['after']}]")
+        for stage in stages:
+            if stage["before"] == stage["after"]:
+                continue
+            detail = ""
+            if truth := stage.get("truth_counts"):
+                detail = (f"  {truth['UNCLASSIFIED']} unclassified" if "UNCLASSIFIED" in truth else
+                          f"  FALSE {truth['FALSE']}, UNKNOWN {truth['UNKNOWN']} (SQL NULL)")
+            print(f"  {stage['clause']}  [{stage['before']} -> {stage['after']}]{detail}")
+
+
 def main(argv=None):
     argv = sys.argv[1:] if argv is None else argv
-    demo = bool(argv and argv[0] == "demo")
-    parser = _parser(demo)
-    args = parser.parse_args(argv[1:] if demo else argv)
+    command = argv[0] if argv and argv[0] in ("demo", "audit") else None
+    demo, audit = command == "demo", command == "audit"
+    parser = _parser(command)
+    args = parser.parse_args(argv[1:] if command else argv)
     flat = demo and args.name == "flat-counts"
     if flat and (args.expect is not None or args.expect_rows is not None):
         parser.error("flat-counts traces two orders. Use --expect and --expect-rows with a single trace.")
     try:
         if demo:
             sql = DEMOS[args.name][1]
-            key, value = "o.id", 42
             con = open_demo(args.name)
         else:
             sql = args.sql_file.read_text(encoding="utf-8-sig")
-            key, value = args.trace
             con = _open_db(args.db) if args.db else open_tables(args.table)
         with con:
-            result = trace_flat_counts(con) if flat else trace_row(con, sql, key, value)
+            if audit:
+                con.execute("BEGIN TRANSACTION READ ONLY")
+                result = audit_rows(con, sql, args.key, args.expect_rows, limit=args.limit)
+                con.commit()
+            elif flat:
+                result = trace_flat_counts(con)
+            else:
+                key, value = ("o.id", 42) if demo else args.trace
+                result = trace_row(con, sql, key, value)
     except (OSError, ValueError, duckdb.Error) as err:
         parser.error(str(err))
     if args.json:
         print(json.dumps(result, indent=2, default=str))
+    elif audit:
+        _show_audit(result)
     elif flat:
         _show_flat_counts(result)
     else:
         _show(result)
+    if audit:
+        return int(result["violation_count"] > 0)
     code = 0
     if args.expect and args.expect != result["status"]:
         print(f"Expected {args.expect}, got {result['status']}.", file=sys.stderr)

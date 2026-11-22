@@ -84,11 +84,11 @@ def _sample_type(kind):
     return kind
 
 
-def _scan(plan: Query, key: str, columns: list[str], native_only=False) -> tuple[str, int]:
+def _scan(plan: Query, key: str, columns: list[str], native_only=False, null_key=False) -> tuple[str, int]:
     """Build a single read statement for counts and evidence from one snapshot."""
     rows = _cte_name("rows", plan)
     ctes, stats = [], []
-    key_filter = f"WHERE {key} IS NOT DISTINCT FROM cast_to_type(?, {key})"
+    key_filter = f"WHERE {key} IS NULL" if null_key else f"WHERE {key} IS NOT DISTINCT FROM cast_to_type(?, {key})"
     args = 1
     if plan.join_sql:
         source = _cte_name("source", plan)
@@ -124,7 +124,7 @@ def _scan(plan: Query, key: str, columns: list[str], native_only=False) -> tuple
     ctes.append(
         f"{rows}{fields} AS (SELECT {select} FROM {plan.base_sql} {join}\n{key_filter})"
     )
-    return f"WITH {', '.join(ctes)} SELECT {', '.join(stats)} FROM {rows}", args
+    return f"WITH {', '.join(ctes)} SELECT {', '.join(stats)} FROM {rows}", 0 if null_key else args
 
 
 def _json(value):
@@ -200,13 +200,14 @@ def _where_stage(plan: Query, joined: int, stats: list) -> dict:
     }
 
 
-def trace_row(connection, sql: str, key: str, value) -> dict:
-    """Return source, join, and filter evidence for all rows with the source key."""
-    plan = parse_query(sql)
-    key_col = _key_column(plan, key)
-    connection.execute(f"EXPLAIN {plan.sql}")
+def _prepare_trace(connection, plan, key_col):
     columns, types = _sample_columns(connection, plan)
-    statement, args = _scan(plan, key_col, columns, native_only=needs_native_guard(plan.where_expr, types))
+    return columns, needs_native_guard(plan.where_expr, types)
+
+
+def _trace(connection, plan, key, key_col, value, prepared):
+    columns, native_only = prepared
+    statement, args = _scan(plan, key_col, columns, native_only=native_only, null_key=value is None)
     stats = connection.execute(statement, [value] * args).fetchone()
     source, unmatched, joined, *where = stats if plan.join_sql else (stats[0], 0, *stats)
     stages = [{
@@ -230,3 +231,11 @@ def trace_row(connection, sql: str, key: str, value) -> dict:
         "stages": stages,
         "output_rows": output,
     }
+
+
+def trace_row(connection, sql: str, key: str, value) -> dict:
+    """Return source, join, and filter evidence for all rows with the source key."""
+    plan = parse_query(sql)
+    key_col = _key_column(plan, key)
+    connection.execute(f"EXPLAIN {plan.sql}")
+    return _trace(connection, plan, key, key_col, value, _prepare_trace(connection, plan, key_col))

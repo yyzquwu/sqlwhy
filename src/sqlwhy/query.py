@@ -1,5 +1,6 @@
 """Validate and extract the supported read-only DuckDB SELECT shape."""
 
+from collections import Counter
 from dataclasses import dataclass
 from typing import Literal
 
@@ -26,6 +27,8 @@ _CAST_TYPES = {
 @dataclass(frozen=True, slots=True)
 class Query:
     sql: str
+    statement_sql: str
+    projections: tuple[exp.Expr, ...]
     base_sql: str
     base_alias: str
     base_name: str
@@ -199,12 +202,45 @@ def parse_query(sql: str) -> Query:
     where_sql = sql[tokens[stop + 1].start:tokens[-1].end + 1] if where else None
     right_sql = _render(right) if right else None
     return Query(
-        sql=sql, base_sql=_render(base), base_alias=base.alias_or_name, base_name=base.name,
+        sql=sql, statement_sql=sql[:tokens[-1].end + 1], projections=tuple(stmt.expressions),
+        base_sql=_render(base), base_alias=base.alias_or_name, base_name=base.name,
         join_sql=f"{kind.upper()} JOIN {right_sql} ON {on_sql}" if kind else None,
         right_sql=right_sql, right_alias=right.alias_or_name if right else None,
         right_name=right.name if right else None, join_kind=kind, on_sql=on_sql,
         where_sql=where_sql, where_columns=where_columns, where_expr=where.this if where else None,
     )
+
+
+def projected_key(plan: Query, key_name: str, source_names, right_names, output_names) -> int:
+    """Find the ordinal of a unique, direct projection of the left-source key."""
+    key = key_name.translate(_FOLD)
+    base = plan.base_alias.translate(_FOLD)
+    origins = []
+    for proj in plan.projections:
+        expr = _unparen(proj.this if isinstance(proj, exp.Alias) else proj)
+        if isinstance(expr, exp.Star):
+            origins.extend(name.translate(_FOLD) == key for name in source_names)
+            origins.extend(False for _ in right_names)
+        elif isinstance(expr, exp.Column) and isinstance(expr.this, exp.Star):
+            if expr.table.translate(_FOLD) == base:
+                origins.extend(name.translate(_FOLD) == key for name in source_names)
+            else:
+                origins.extend(False for _ in right_names)
+        else:
+            origins.append(isinstance(expr, exp.Column) and expr.name.translate(_FOLD) == key
+                           and (not expr.table or expr.table.translate(_FOLD) == base))
+
+    if len(origins) != len(output_names):
+        raise ValueError("Audit could not determine the report's projected columns.")
+    matches = [i for i, is_key in enumerate(origins) if is_key]
+    if not matches:
+        raise ValueError("Audit requires the source key to be projected directly in SELECT.")
+    names = [name.translate(_FOLD) for name in output_names]
+    counts = Counter(names)
+    for index in matches:
+        if counts[names[index]] == 1:
+            return index
+    raise ValueError("Audit found an ambiguous projected source key. Give a direct key projection a unique name.")
 
 
 def needs_native_guard(expr, types):
