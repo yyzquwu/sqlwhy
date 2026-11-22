@@ -84,7 +84,7 @@ def _sample_type(kind):
     return kind
 
 
-def _scan(plan: Query, key: str, columns: list[str], native_only=False, null_key=False) -> tuple[str, int]:
+def _scan(plan: Query, key: str, columns: list[str], native_only=False, null_key=False, text_inputs=()) -> tuple[str, int]:
     """Build a single read statement for counts and evidence from one snapshot."""
     rows = _cte_name("rows", plan)
     ctes, stats = [], []
@@ -115,7 +115,10 @@ def _scan(plan: Query, key: str, columns: list[str], native_only=False, null_key
         tests = ("TRUE", "FALSE", "NULL")
         stats.extend(f"count(*) FILTER (WHERE outcome IS {test})" for test in tests)
         if inputs:
-            order = ", ".join(f"{col} ASC NULLS FIRST" for col in inputs)
+            # Preserve SQL's collation order, then resolve ties by the original UTF-8 bytes.
+            terms = [f"{col} ASC NULLS FIRST" for col in inputs]
+            terms.extend(f"encode(input{i}) ASC NULLS FIRST" for i in text_inputs)
+            order = ", ".join(terms)
             stats.extend(
                 f"(SELECT list(sample ORDER BY {order}) FROM (SELECT {', '.join(inputs)} FROM {rows}"
                 f" WHERE outcome IS {test} ORDER BY {order} LIMIT {_SAMPLE_LIMIT}) AS sample)"
@@ -202,12 +205,14 @@ def _where_stage(plan: Query, joined: int, stats: list) -> dict:
 
 def _prepare_trace(connection, plan, key_col):
     columns, types = _sample_columns(connection, plan)
-    return columns, needs_native_guard(plan.where_expr, types)
+    text_inputs = tuple(i for i, kind in enumerate(types.values()) if kind == "VARCHAR")
+    return columns, needs_native_guard(plan.where_expr, types), text_inputs
 
 
 def _trace(connection, plan, key, key_col, value, prepared):
-    columns, native_only = prepared
-    statement, args = _scan(plan, key_col, columns, native_only=native_only, null_key=value is None)
+    columns, native_only, text_inputs = prepared
+    statement, args = _scan(plan, key_col, columns, native_only=native_only, null_key=value is None,
+                            text_inputs=text_inputs)
     stats = connection.execute(statement, [value] * args).fetchone()
     source, unmatched, joined, *where = stats if plan.join_sql else (stats[0], 0, *stats)
     stages = [{

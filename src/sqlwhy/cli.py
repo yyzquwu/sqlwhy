@@ -145,7 +145,11 @@ def _show_audit(result):
 
 
 def main(argv=None):
-    argv = sys.argv[1:] if argv is None else argv
+    if argv is None:
+        for stream in (sys.stdout, sys.stderr):
+            if getattr(stream, "reconfigure", None):
+                stream.reconfigure(errors="backslashreplace")
+        argv = sys.argv[1:]
     command = argv[0] if argv and argv[0] in ("demo", "audit") else None
     demo, audit = command == "demo", command == "audit"
     parser = _parser(command)

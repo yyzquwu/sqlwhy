@@ -27,7 +27,7 @@ Choose a column from the leftmost source table and include it directly in the SE
 
 The CLI counts every violation in one database snapshot. By default it explains up to five failing keys in ascending order, with NULL first. `--limit 0` returns the totals only. `--json` includes the totals and every trace stage for the displayed examples. Exit **0** means every key met the expectation, **1** means at least one violated it, and **2** means the audit could not run.
 
-Audit keys can be booleans, integers, decimals, floating-point numbers, strings, blobs, or UUIDs. Temporal and nested key types are outside v0.3. Columns of those types can still appear elsewhere in a report.
+Audit keys can be booleans, fixed-width integers, decimals, floating-point numbers, strings, blobs, or UUIDs. Temporal and nested key types are outside v0.3. Columns of those types can still appear elsewhere in a report.
 
 To use this check in GitHub Actions after installing sqlwhy, add a step like the one exercised by this repository. Change the query, files, and key to match your report. [CI workflow](.github/workflows/test.yml)
 

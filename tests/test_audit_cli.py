@@ -1,4 +1,5 @@
 import json
+import os
 import subprocess
 import sys
 
@@ -108,3 +109,32 @@ def test_audit_help_is_discoverable():
     result = cli("audit", "--help")
     assert result.returncode == 0 and not result.stderr
     assert all(option in result.stdout for option in ("--key", "--expect-rows", "--limit", "--table", "--db"))
+
+
+@pytest.mark.parametrize("expected,code", [(1, 0), (0, 1)])
+def test_redirected_text_preserves_audit_exit_code(tmp_path, expected, code):
+    sql, db = tmp_path / "report.sql", tmp_path / "orders.duckdb"
+    sql.write_text('SELECT "订单" FROM orders WHERE "订单" IS NOT NULL', encoding="utf-8")
+    with duckdb.connect(str(db)) as con:
+        con.execute('CREATE TABLE orders AS SELECT \'東京\' AS "订单"')
+    result = subprocess.run(
+        [sys.executable, "-m", "sqlwhy", "audit", str(sql), "--db", str(db), "--key", "订单",
+         "--expect-rows", str(expected)], capture_output=True, encoding="cp1252",
+        env={**os.environ, "PYTHONIOENCODING": "cp1252:strict"}, timeout=20,
+    )
+    assert result.returncode == code and not result.stderr
+    assert r"\u8ba2\u5355" in result.stdout
+    if code:
+        assert r"\u6771\u4eac" in result.stdout
+
+
+def test_sample_order_breaks_collation_ties_before_limiting(tmp_path):
+    sql, db = tmp_path / "report.sql", tmp_path / "events.duckdb"
+    sql.write_text("SELECT id FROM events WHERE label = 'kept'", encoding="utf-8")
+    with duckdb.connect(str(db)) as con:
+        con.execute("CREATE TABLE events(id INT, label VARCHAR COLLATE NOCASE)")
+        con.executemany("INSERT INTO events VALUES (1, ?)", [(s,) for s in ("aa", "aA", "Aa", "AA")])
+    result = cli("audit", sql, "--db", db, "--key", "id", "--expect-rows", 1, "--json")
+    assert result.returncode == 1 and not result.stderr
+    samples = json.loads(result.stdout)["examples"][0]["stages"][-1]["samples"]
+    assert [s["inputs"]['"label"'] for s in samples] == ["AA", "Aa", "aA"]
