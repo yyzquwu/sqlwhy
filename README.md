@@ -34,7 +34,7 @@ sqlwhy report.sql --db warehouse.duckdb --trace orders.id=42 --json
 
 `--db` opens an existing DuckDB file read-only. Alternatively, repeat `--table name=path` to import individual local CSV or Parquet files into memory for this invocation. CSV uses DuckDB type inference. Parquet retains its stored types. File mode loads the supplied tables each time, so a DuckDB file is more convenient for repeated traces on larger data.
 
-Use an unqualified source key or qualify it with the left table?s alias. An unambiguous base-table name also works. Bare NULL traces SQL NULL; leading-zero IDs such as 0042 stay text. DuckDB casts the supplied value to the source column?s type.
+Use an unqualified source key or qualify it with the alias of the left table. An unambiguous base-table name also works. Bare `NULL` traces SQL NULL. Leading-zero IDs such as `0042` stay text. DuckDB casts the supplied value to the type of the source column.
 
 The key belongs to the **leftmost source**. A key can identify several rows, and a join can multiply them. The counts are for all rows carrying that key. A WHERE stage reports separate TRUE, FALSE and UNKNOWN counts and example predicate inputs. An explanation identifies what the SQL did; deciding whether the query or the underlying data needs to change is up to the analyst.
 
