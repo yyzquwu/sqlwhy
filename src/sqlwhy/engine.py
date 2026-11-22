@@ -4,11 +4,11 @@ import math
 import re
 from datetime import date, time
 
-from .query import Query, parse_query
+from .query import Query, needs_native_guard, parse_query
 
 _ID = r'(?:"(?:[^"]|"")+"|[^\W\d][\w$]*)'
 _KEY = re.compile(rf"(?:(?P<qual>{_ID})\s*\.\s*)?(?P<col>{_ID})")
-_TRUTH = (("TRUE", "TRUE"), ("FALSE", "FALSE"), ("UNKNOWN", "NULL"))
+_TRUTH = ("TRUE", "FALSE", "UNKNOWN")
 _SAMPLE_LIMIT = 3
 _ASCII_LOWER = str.maketrans("ABCDEFGHIJKLMNOPQRSTUVWXYZ", "abcdefghijklmnopqrstuvwxyz")
 
@@ -43,7 +43,19 @@ def _cte_name(label: str, plan: Query) -> str:
     return name
 
 
-def _scan(plan: Query, key: str) -> tuple[str, int]:
+def _sample_columns(connection, plan):
+    if not plan.where_columns:
+        return [], {}
+    names = ", ".join(plan.where_columns)
+    info = connection.execute(f"DESCRIBE SELECT {names} FROM {plan.base_sql} {plan.join_sql or ''}").fetchall()
+    # Python datetimes lose sub-microsecond precision. Convert those specific
+    # columns in DuckDB before transferring the nested samples to the client.
+    types = {col: row[1] for col, row in zip(plan.where_columns, info, strict=True)}
+    return [f"replace(CAST({col} AS VARCHAR), ' ', 'T')" if kind in ("TIME_NS", "TIMESTAMP_NS") else col
+            for col, kind in types.items()], types
+
+
+def _scan(plan: Query, key: str, columns: list[str], native_only=False) -> tuple[str, int]:
     """Build a single read statement for counts and evidence from one snapshot."""
     rows = _cte_name("rows", plan)
     ctes, stats = [], []
@@ -62,19 +74,24 @@ def _scan(plan: Query, key: str) -> tuple[str, int]:
 
     stats.append("count(*)")
     select, fields = "1", ""
-    if plan.where_sql:
+    join = plan.join_sql or ""
+    if plan.where_sql and native_only:
+        stats.append(f"(SELECT count(*) FROM {plan.base_sql} {join}\n{key_filter} AND ({plan.where_sql}\n))")
+        args += 1
+    elif plan.where_sql:
         inputs = [f"input{i}" for i in range(len(plan.where_columns))]
-        select = ", ".join([f"CAST(({plan.where_sql}\n) AS BOOLEAN)", *plan.where_columns])
+        outcome = f"CAST(({plan.where_sql}\n) AS BOOLEAN)"
+        select = ", ".join([outcome, *columns])
         fields = f"({', '.join(['outcome', *inputs])})"
-        stats.extend(f"count(*) FILTER (WHERE outcome IS {test})" for _, test in _TRUTH)
+        tests = ("TRUE", "FALSE", "NULL")
+        stats.extend(f"count(*) FILTER (WHERE outcome IS {test})" for test in tests)
         if inputs:
             order = ", ".join(f"{col} ASC NULLS FIRST" for col in inputs)
             stats.extend(
                 f"(SELECT list(sample ORDER BY {order}) FROM (SELECT {', '.join(inputs)} FROM {rows}"
                 f" WHERE outcome IS {test} ORDER BY {order} LIMIT {_SAMPLE_LIMIT}) AS sample)"
-                for _, test in _TRUTH
+                for test in tests
             )
-    join = plan.join_sql or ""
     ctes.append(
         f"{rows}{fields} AS (SELECT {select} FROM {plan.base_sql} {join}\n{key_filter})"
     )
@@ -124,20 +141,31 @@ def _join_stage(plan: Query, source: int, unmatched: int, joined: int) -> dict:
 
 
 def _where_stage(plan: Query, joined: int, stats: list) -> dict:
+    if len(stats) == 1:
+        kept = stats[0]
+        return {
+            "stage": "where", "clause": f"WHERE {plan.where_sql}", "before": joined, "after": kept,
+            "detail": (f"DuckDB's WHERE filter kept {kept} of {joined} rows. The compound predicate "
+                       "may guard an operation, so rejected rows are unclassified."),
+            "truth_counts": {"TRUE": kept, "FALSE": None, "UNKNOWN": None, "UNCLASSIFIED": joined - kept},
+            "samples": [],
+        }
     kept, false, unknown, *samples = stats
+    counts = {"TRUE": kept, "FALSE": false, "UNKNOWN": unknown}
+    detail = (f"WHERE kept {kept} of {joined} row{'s' if joined != 1 else ''}. "
+              f"{false} evaluated to FALSE and {unknown} to UNKNOWN (SQL NULL).")
     return {
         "stage": "where",
         "clause": f"WHERE {plan.where_sql}",
         "before": joined,
         "after": kept,
-        "detail": (
-            f"WHERE kept {kept} of {joined} row{'s' if joined != 1 else ''}. "
-            f"{false} evaluated to FALSE and {unknown} to UNKNOWN (SQL NULL)."
-        ),
-        "truth_counts": {"TRUE": kept, "FALSE": false, "UNKNOWN": unknown},
+        "detail": detail,
+        "truth_counts": counts,
         "samples": [
-            {"outcome": outcome, "inputs": {col: _json(row[f"input{i}"]) for i, col in enumerate(plan.where_columns)}}
-            for (outcome, _), rows in zip(_TRUTH, samples)
+            {"outcome": outcome, "inputs": {
+                col: _json(row[f"input{i}"])
+                for i, col in enumerate(plan.where_columns)}}
+            for outcome, rows in zip(_TRUTH, samples)
             for row in rows or []
         ],
     }
@@ -148,7 +176,8 @@ def trace_row(connection, sql: str, key: str, value) -> dict:
     plan = parse_query(sql)
     key_col = _key_column(plan, key)
     connection.execute(f"EXPLAIN {plan.sql}")
-    statement, args = _scan(plan, key_col)
+    columns, types = _sample_columns(connection, plan)
+    statement, args = _scan(plan, key_col, columns, native_only=needs_native_guard(plan.where_expr, types))
     stats = connection.execute(statement, [value] * args).fetchone()
     source, unmatched, joined, *where = stats if plan.join_sql else (stats[0], 0, *stats)
     stages = [{

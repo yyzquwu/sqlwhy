@@ -100,3 +100,40 @@ def test_value_is_bound_and_caller_transaction_stays_open(db):
         db.execute("rollback")
     assert db.sql("select count(*) from names").fetchone() == (0,)
     assert db.sql("select count(*) from orders").fetchone() == (4,)
+
+
+def test_guarded_cast_counts_use_native_filter_semantics(db):
+    db.execute("create table amounts as from (values (42,false,'n/a'),(42,true,'9'),"
+               "(42,true,'-1'),(42,true,NULL)) t(id,valid,amount)")
+    sql = "select id from amounts where valid and cast(amount as integer) > 0"
+    assert db.execute(sql).fetchall() == [(42,)]
+    where = trace_row(db, sql, "id", 42)["stages"][-1]
+    assert where["after"] == 1
+    assert where["truth_counts"] == {"TRUE": 1, "FALSE": None, "UNKNOWN": None, "UNCLASSIFIED": 3}
+    # A required failing cast must still propagate DuckDB's execution error.
+    with pytest.raises(duckdb.ConversionException):
+        trace_row(db, "select id from amounts where cast(amount as integer) > 0", "id", 42)
+
+
+def test_guarded_cast_uses_native_or_filter(db):
+    db.execute("create table charges as from (values (42,true,'not a number'),"
+               "(42,false,'1'),(42,false,'-1')) t(id,free,amount)")
+    sql = "select id from charges where free or cast(amount as integer) > 0"
+    assert trace_row(db, sql, "id", 42)["output_rows"] == len(db.execute(sql).fetchall()) == 2
+
+
+def test_nanosecond_inputs_remain_distinguishable(db):
+    db.execute("create table deadlines as select 42 as id, "
+               "timestamp_ns '2026-11-21 00:00:00.000000002' as placed, "
+               "timestamp_ns '2026-11-21 00:00:00.000000001' as cutoff")
+    stage = trace_row(db, "select id from deadlines where placed > cutoff", "id", 42)["stages"][-1]
+    assert stage["after"] == 1
+    assert stage["samples"] == [{"outcome": "TRUE", "inputs": {
+        '"placed"': "2026-11-21T00:00:00.000000002", '"cutoff"': "2026-11-21T00:00:00.000000001"}}]
+
+
+def test_duckdb_prefix_aliases_cover_the_whole_relation(db):
+    sql = "select o.id from o: main.orders left join p: main.payments on o.line=p.line where p.ok"
+    trace = trace_row(db, sql, "o.id", 42)
+    assert trace["output_rows"] == len(db.execute(sql).fetchall()) == 2
+    assert trace["stages"][1]["clause"].endswith("ON o.line=p.line")

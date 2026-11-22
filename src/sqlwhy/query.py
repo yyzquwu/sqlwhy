@@ -37,6 +37,7 @@ class Query:
     on_sql: str | None
     where_sql: str | None
     where_columns: tuple[str, ...]
+    where_expr: exp.Expr | None
 
 
 def _render(node: exp.Expr) -> str:
@@ -190,8 +191,8 @@ def parse_query(sql: str) -> Query:
 
     # SQLGlot can normalize DuckDB syntax with different semantics, such as IN lists.
     last_table = right or base
-    last_id = (last_table.args.get("alias") or last_table).this
-    start = next((i for i, t in enumerate(tokens) if t.start > last_id.meta["end"]), len(tokens))
+    last_end = max(part.meta["end"] for part in last_table.find_all(exp.Identifier))
+    start = next((i for i, t in enumerate(tokens) if t.start > last_end), len(tokens))
     stop = next((i for i in range(start, len(tokens))
                  if tokens[i].token_type == TT.WHERE and tokens[i - 1].token_type != TT.DOT), len(tokens))
     on_sql = sql[tokens[start + 1].start:tokens[stop - 1].end + 1] if join else None
@@ -202,5 +203,38 @@ def parse_query(sql: str) -> Query:
         join_sql=f"{kind.upper()} JOIN {right_sql} ON {on_sql}" if kind else None,
         right_sql=right_sql, right_alias=right.alias_or_name if right else None,
         right_name=right.name if right else None, join_kind=kind, on_sql=on_sql,
-        where_sql=where_sql, where_columns=where_columns,
+        where_sql=where_sql, where_columns=where_columns, where_expr=where.this if where else None,
     )
+
+
+def needs_native_guard(expr, types):
+    """Only project compound filters when their atoms require no fallible operation."""
+    if expr is None or expr.find(exp.And, exp.Or) is None:
+        return False
+
+    def family(node):
+        if isinstance(node, exp.Column):
+            kind = types.get(_render(node))
+            if kind in {"TINYINT", "SMALLINT", "INTEGER", "BIGINT", "FLOAT", "DOUBLE"}:
+                return "number"
+            return kind
+        if isinstance(node, exp.Literal):
+            return "VARCHAR" if node.is_string else "number"
+        if isinstance(node, exp.Boolean):
+            return "BOOLEAN"
+        return None
+
+    def safe(node):
+        node = _unparen(node)
+        if isinstance(node, (exp.And, exp.Or)):
+            return safe(node.this) and safe(node.expression)
+        if isinstance(node, exp.Not):
+            return safe(node.this)
+        if isinstance(node, exp.Is) and isinstance(node.expression, exp.Null):
+            return isinstance(node.this, exp.Column)
+        if isinstance(node, (exp.EQ, exp.NEQ, exp.LT, exp.LTE, exp.GT, exp.GTE)):
+            left = family(node.this)
+            return left in {"BOOLEAN", "VARCHAR", "number"} and left == family(node.expression)
+        return family(node) == "BOOLEAN"
+
+    return not safe(expr)
