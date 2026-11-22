@@ -163,3 +163,28 @@ def test_nested_nanoseconds_survive_the_json_evidence_path(db, wrap):
         actual = evidence["inputs"][col]
         assert isinstance(actual, (dict, list))
         assert suffix in json.dumps(actual)
+
+
+def test_nested_ns_preserves_json_null_and_float_types(db):
+    db.execute("""
+        create table events as select 42 as id,
+          struct_pack(t := ts, meta := 'null'::JSON, x := 0.1::DOUBLE) as a,
+          struct_pack(t := ts, meta := NULL::JSON, x := 0.1::DOUBLE) as b
+        from (select timestamp_ns '2026-11-21 00:00:00.000000002' as ts)
+    """)
+    sql = "select id from events where a <> b"
+    assert db.execute(sql).fetchall() == [(42,)]
+    sample = trace_row(db, sql, "id", 42)["stages"][-1]["samples"][0]["inputs"]
+    assert sample['"a"'] == {"t": "2026-11-21 00:00:00.000000002", "meta": "null", "x": 0.1}
+    assert sample['"b"'] == dict(sample['"a"'], meta=None)
+
+
+def test_union_tags_are_not_silently_stripped_from_samples(db):
+    db.execute("create table variants as select 42 as id, "
+               "[union_value(x := 1)::union(x integer,y integer)] as a,"
+               "[union_value(y := 1)::union(x integer,y integer)] as b")
+    sql = "select id from variants where a <> b"
+    assert db.execute(sql).fetchall() == [(42,)]
+    stage = trace_row(db, sql, "id", 42)["stages"][-1]
+    assert stage["after"] == 1 and stage["samples"] == []
+    assert "tagged UNION" in stage["detail"]

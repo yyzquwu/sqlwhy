@@ -1,10 +1,10 @@
 """Trace rows identified by a key on a DuckDB SELECT's leftmost table."""
 
-import json
 import math
 import re
 from datetime import date, time
-from decimal import Decimal
+
+import duckdb
 
 from .query import Query, needs_native_guard, parse_query
 
@@ -49,23 +49,39 @@ def _sample_columns(connection, plan):
     if not plan.where_columns:
         return [], {}
     names = ", ".join(plan.where_columns)
-    info = connection.execute(f"DESCRIBE SELECT {names} FROM {plan.base_sql} {plan.join_sql or ''}").fetchall()
-    # Python datetimes lose sub-microsecond precision. Convert those specific
-    # columns in DuckDB before transferring the nested samples to the client.
+    info = connection.execute(f"SELECT {names} FROM {plan.base_sql} {plan.join_sql or ''} LIMIT 0").description
     types = {col: row[1] for col, row in zip(plan.where_columns, info, strict=True)}
+    bound_types = {col: str(kind) for col, kind in types.items()}
+    # DuckDB's Python client discards UNION tags even when the tag determines
+    # equality. Keep the counts but omit examples whose inputs would be lossy.
+    if any(re.search(r"\bUNION\(", kind) for kind in bound_types.values()):
+        return [], bound_types
     samples = []
     for col, kind in types.items():
-        if kind in ("TIME_NS", "TIMESTAMP_NS"):
+        projected = _sample_type(kind)
+        if kind.id in ("time_ns", "timestamp_ns"):
             samples.append(f"replace(CAST({col} AS VARCHAR), ' ', 'T')")
-        elif _nested_ns(kind):
-            samples.append(f"to_json({col})")
+        elif projected != kind:
+            samples.append(f"CAST({col} AS {projected})")
         else:
             samples.append(col)
-    return samples, types
+    return samples, bound_types
 
 
-def _nested_ns(kind):
-    return kind not in ("TIME_NS", "TIMESTAMP_NS") and re.search(r"\b(?:TIME|TIMESTAMP)_NS\b", kind) is not None
+def _sample_type(kind):
+    """Change only nanosecond leaves to text before DuckDB converts them to Python."""
+    if kind.id in ("timestamp_ns", "time_ns"):
+        return duckdb.sqltypes.VARCHAR
+    if kind.id == "list":
+        return duckdb.list_type(_sample_type(kind.children[0][1]))
+    if kind.id == "array":
+        child, size = kind.children
+        return duckdb.array_type(_sample_type(child[1]), size[1])
+    if kind.id == "map":
+        return duckdb.map_type(*(_sample_type(t) for _, t in kind.children))
+    if kind.id == "struct":
+        return duckdb.struct_type({k: _sample_type(t) for k, t in kind.children})
+    return kind
 
 
 def _scan(plan: Query, key: str, columns: list[str], native_only=False) -> tuple[str, int]:
@@ -92,7 +108,7 @@ def _scan(plan: Query, key: str, columns: list[str], native_only=False) -> tuple
         stats.append(f"(SELECT count(*) FROM {plan.base_sql} {join}\n{key_filter} AND ({plan.where_sql}\n))")
         args += 1
     elif plan.where_sql:
-        inputs = [f"input{i}" for i in range(len(plan.where_columns))]
+        inputs = [f"input{i}" for i in range(len(columns))]
         outcome = f"CAST(({plan.where_sql}\n) AS BOOLEAN)"
         select = ", ".join([outcome, *columns])
         fields = f"({', '.join(['outcome', *inputs])})"
@@ -153,7 +169,7 @@ def _join_stage(plan: Query, source: int, unmatched: int, joined: int) -> dict:
     }
 
 
-def _where_stage(plan: Query, joined: int, stats: list, types: dict) -> dict:
+def _where_stage(plan: Query, joined: int, stats: list) -> dict:
     if len(stats) == 1:
         kept = stats[0]
         return {
@@ -176,18 +192,12 @@ def _where_stage(plan: Query, joined: int, stats: list, types: dict) -> dict:
         "truth_counts": counts,
         "samples": [
             {"outcome": outcome, "inputs": {
-                col: _sample_value(row[f"input{i}"], types[col])
+                col: _json(row[f"input{i}"])
                 for i, col in enumerate(plan.where_columns)}}
             for outcome, rows in zip(_TRUTH, samples)
             for row in rows or []
         ],
     }
-
-
-def _sample_value(value, kind):
-    if value is not None and _nested_ns(kind):
-        value = json.loads(value, parse_float=Decimal)
-    return _json(value)
 
 
 def trace_row(connection, sql: str, key: str, value) -> dict:
@@ -209,7 +219,10 @@ def trace_row(connection, sql: str, key: str, value) -> dict:
     if plan.join_sql:
         stages.append(_join_stage(plan, source, unmatched, joined))
     if plan.where_sql:
-        stages.append(_where_stage(plan, joined, where, types))
+        stage = _where_stage(plan, joined, where)
+        if plan.where_columns and not columns:
+            stage["detail"] += " Samples omitted because a predicate input contains a tagged UNION."
+        stages.append(stage)
     output = stages[-1]["after"]
     return {
         "status": "present" if output else "removed" if source else "source_absent",
