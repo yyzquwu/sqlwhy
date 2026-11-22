@@ -1,0 +1,21 @@
+{
+  "id": "b2",
+  "title": "Macrostrat source list drops maps with unrecognized scales",
+  "upstream": "https://github.com/UW-Macrostrat/macrostrat-api/pull/285",
+  "revision": "1fb593e5cec0ba5cee29f86e34cb5892aff179f0",
+  "source_url": "https://github.com/UW-Macrostrat/macrostrat-api/commit/1fb593e5cec0ba5cee29f86e34cb5892aff179f0.patch",
+  "source_before_url": "https://github.com/UW-Macrostrat/macrostrat-api/blob/2154c0416a284ecfc1bf50838929a1cbbef1b2ba/v2/definitions/sources.ts#L56-L80",
+  "evidence": "The maps sources API lost otherwise eligible sources whose scale was NULL or absent from its hard-coded sort lookup. The merged patch changes only the scale lookup join from inner to left.",
+  "source_form": "template",
+  "source_sql": ") ord (s, ordering) ON sources.scale = ord.s",
+  "replay_kind": "reduced",
+  "adaptation": "The replay materializes the four original VALUES entries as a DuckDB table. It uses the all-sources path with the published eligibility filters, synthetic non-NULL geometry markers, and only the source ID projection. It omits formatting, ordering and the optional sample limit.",
+  "setup_sql": "CREATE SCHEMA maps;\nCREATE TABLE maps.sources (source_id INTEGER PRIMARY KEY, scale VARCHAR, rgeom INTEGER, web_geom INTEGER, status_code VARCHAR, is_finalized BOOLEAN);\nCREATE TABLE scale_order (s VARCHAR PRIMARY KEY, ordering INTEGER);\nINSERT INTO maps.sources VALUES (1, 'regional', 1, 1, 'active', TRUE), (2, 'large', 1, 1, 'active', TRUE), (3, 'large', 1, 1, 'active', FALSE), (4, NULL, 1, 1, 'active', TRUE);\nINSERT INTO scale_order VALUES ('tiny', 0), ('small', 1), ('medium', 2), ('large', 3);",
+  "before_sql": "SELECT sources.source_id AS id FROM maps.sources INNER JOIN scale_order ord ON sources.scale = ord.s WHERE sources.rgeom IS NOT NULL AND sources.web_geom IS NOT NULL AND sources.status_code = 'active' AND sources.is_finalized = TRUE",
+  "after_sql": "SELECT sources.source_id AS id FROM maps.sources LEFT JOIN scale_order ord ON sources.scale = ord.s WHERE sources.rgeom IS NOT NULL AND sources.web_geom IS NOT NULL AND sources.status_code = 'active' AND sources.is_finalized = TRUE",
+  "key": "sources.source_id",
+  "value": "1",
+  "expected_before": 0,
+  "expected_after": 1,
+  "expected_stage": "JOIN"
+}

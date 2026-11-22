@@ -1,0 +1,21 @@
+{
+  "id": "b5",
+  "title": "Lightning Tracker milestone progress includes issues from other projects",
+  "upstream": "https://github.com/chylex/Lightning-Tracker/commit/2f5d58edc87b736c12b9c6963eb347ab7b0d813a",
+  "revision": "2f5d58edc87b736c12b9c6963eb347ab7b0d813a",
+  "source_url": "https://github.com/chylex/Lightning-Tracker/commit/2f5d58edc87b736c12b9c6963eb347ab7b0d813a.patch",
+  "source_before_url": "https://github.com/chylex/Lightning-Tracker/blob/303f1fdfd86de77fca7cdfec6b9142a07ba66cce/src/Database/Tables/ProjectUserSettingsTable.php#L26-L36",
+  "evidence": "Active milestone progress joined issues on milestone_id alone, although milestone IDs can repeat across projects. The fix adds project_id equality so the weighted calculation uses issues from the active project only.",
+  "source_form": "fragment",
+  "source_sql": "LEFT JOIN issues i ON m.milestone_id = i.milestone_id",
+  "replay_kind": "reduced",
+  "adaptation": "The replay fixes the active project in a WHERE filter and projects the milestone ID to count contributing rows before aggregation. It drops the user-settings and issue-weight lookups and uses synthetic issues with the same milestone ID in two projects. The complete upstream query also has GROUP BY and three joins. sqlwhy rejects GROUP BY, and DuckDB additionally needs the selected title in GROUP BY.",
+  "setup_sql": "CREATE TABLE milestones (project_id INTEGER, milestone_id INTEGER, PRIMARY KEY (project_id, milestone_id));\nCREATE TABLE issues (project_id INTEGER, milestone_id INTEGER);\nINSERT INTO milestones VALUES (1, 7), (2, 7), (1, 8);\nINSERT INTO issues VALUES (1, 7), (2, 7);",
+  "before_sql": "SELECT m.milestone_id AS id FROM milestones m LEFT JOIN issues i ON m.milestone_id = i.milestone_id WHERE m.project_id = 1",
+  "after_sql": "SELECT m.milestone_id AS id FROM milestones m LEFT JOIN issues i ON m.milestone_id = i.milestone_id AND m.project_id = i.project_id WHERE m.project_id = 1",
+  "key": "m.milestone_id",
+  "value": "7",
+  "expected_before": 2,
+  "expected_after": 1,
+  "expected_stage": "JOIN"
+}

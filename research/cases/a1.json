@@ -1,0 +1,22 @@
+{
+  "id": "a1",
+  "title": "QuickBooks invoice payments joined across source relations",
+  "upstream": "https://github.com/fivetran/dbt_quickbooks/pull/123",
+  "revision": "9f759070707abe0971ee7199335abca61b391a7c",
+  "source_url": "https://github.com/fivetran/dbt_quickbooks/blob/505a2f48c0f07f10d6ef0ef516b84e1a7800c48f/models/intermediate/int_quickbooks__invoice_join.sql#L51-L62",
+  "evidence": "Issue #120 reported that an invoice ID shared by several QuickBooks sources picked up other sources' payment IDs. The merged diff adds source_relation to the invoice_pay join and carries it into downstream joins.",
+  "source_form": "template",
+  "template_engine": "dbt",
+  "source_sql": "left join invoice_linked\n        on invoices.invoice_id = invoice_linked.invoice_id\n\n    where invoice_linked.payment_id is not null",
+  "replay_kind": "reduced",
+  "adaptation": "Isolates invoice_pay with synthetic inputs, adds a unique invoice row ID for tracing, and omits the invoice estimate and downstream merges. The excerpt comes from a dbt model that requires rendering.",
+  "setup_sql": "CREATE TABLE invoices (row_id INTEGER, invoice_id INTEGER, source_relation VARCHAR);\nINSERT INTO invoices VALUES (1, 10, 'alpha'), (2, 10, 'beta'), (3, 12, 'alpha');\nCREATE TABLE invoice_linked (invoice_id INTEGER, source_relation VARCHAR, payment_id INTEGER);\nINSERT INTO invoice_linked VALUES (10, 'alpha', 100), (10, 'beta', 200), (12, 'alpha', NULL);",
+  "before_sql": "SELECT i.row_id AS id, p.payment_id\nFROM invoices AS i LEFT JOIN invoice_linked AS p ON i.invoice_id = p.invoice_id\nWHERE p.payment_id IS NOT NULL",
+  "after_sql": "SELECT i.row_id AS id, p.payment_id\nFROM invoices AS i LEFT JOIN invoice_linked AS p ON i.invoice_id = p.invoice_id AND i.source_relation = p.source_relation\nWHERE p.payment_id IS NOT NULL",
+  "key": "i.row_id",
+  "value": "1",
+  "expected_before": 2,
+  "expected_after": 1,
+  "expected_stage": "JOIN",
+  "source_before_url": "https://github.com/fivetran/dbt_quickbooks/blob/505a2f48c0f07f10d6ef0ef516b84e1a7800c48f/models/intermediate/int_quickbooks__invoice_join.sql"
+}

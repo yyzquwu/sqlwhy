@@ -1,0 +1,21 @@
+{
+  "id": "b3",
+  "title": "siuba SQL semi-join repeats a left row for duplicate matches",
+  "upstream": "https://github.com/machow/siuba/commit/e5b1394bfa108c41f48d194804c8d4d078f22807",
+  "revision": "e5b1394bfa108c41f48d194804c8d4d078f22807",
+  "source_url": "https://github.com/machow/siuba/commit/e5b1394bfa108c41f48d194804c8d4d078f22807.patch",
+  "source_before_url": "https://github.com/machow/siuba/blob/568729989333193ff38c26ac68604aa8ba9b490b/siuba/sql/verbs.py#L773-L790",
+  "evidence": "The SQLAlchemy-backed semi_join selected only left columns from an inner join, so duplicate keys on the right duplicated left rows. The fix uses correlated EXISTS and includes a regression test with two right records for one key.",
+  "source_form": "generated",
+  "source_sql": null,
+  "replay_kind": "reduced",
+  "adaptation": "The replay translates the SQLAlchemy construction to an inner join and the upstream correlated EXISTS, keeping the duplicate-key case from the regression test. It replaces ORM-generated aliases, selects a stable synthetic row ID, and omits unused dataframe columns.",
+  "setup_sql": "CREATE TABLE lhs (id INTEGER PRIMARY KEY, ii INTEGER);\nCREATE TABLE rhs (ii INTEGER);\nINSERT INTO lhs VALUES (1, 1), (2, 2), (3, 3);\nINSERT INTO rhs VALUES (1), (1), (2);",
+  "before_sql": "SELECT l.id FROM lhs l INNER JOIN rhs r ON l.ii = r.ii",
+  "after_sql": "SELECT l.id FROM lhs l WHERE EXISTS (SELECT 1 FROM rhs r WHERE l.ii = r.ii)",
+  "key": "l.id",
+  "value": "1",
+  "expected_before": 2,
+  "expected_after": 1,
+  "expected_stage": "JOIN"
+}

@@ -1,0 +1,22 @@
+{
+  "id": "a3",
+  "title": "Shopify checkout discounts multiplied across shipping lines",
+  "upstream": "https://github.com/fivetran/dbt_shopify/pull/51",
+  "revision": "73ef309f4bf7fbcd65011a70823e59309908c834",
+  "source_url": "https://github.com/fivetran/dbt_shopify/blob/304c7ee7f4c1d229981b491c9bf2b60a7411f73b/models/intermediate/int_shopify__discounts__abandoned_checkouts.sql#L27-L46",
+  "evidence": "The merged diff changes the abandoned-checkout discount model to sum shipping prices by checkout_id and source_relation before joining. Previously each shipping line could replicate the same discount contribution before the report grouped by discount code and type.",
+  "source_form": "template",
+  "template_engine": "dbt",
+  "source_sql": "    left join abandoned_checkout_shipping_line\n        on abandoned_checkout_shipping_line.checkout_id = abandoned_checkout_discount_code.checkout_id \n        and abandoned_checkout_shipping_line.source_relation = abandoned_checkout_discount_code.source_relation",
+  "replay_kind": "reduced",
+  "adaptation": "Replays the changed join at the pre-aggregation grain and materializes the new shipping rollup in fixture setup. The checkout details join and final report aggregation are omitted, so counts measure contributions to the aggregate.",
+  "setup_sql": "CREATE TABLE abandoned_checkout_discount_code (id INTEGER, checkout_id INTEGER, source_relation VARCHAR, amount INTEGER);\nINSERT INTO abandoned_checkout_discount_code VALUES (1, 10, 'alpha', 5), (2, 20, 'alpha', 8);\nCREATE TABLE abandoned_checkout_shipping_line (checkout_id INTEGER, source_relation VARCHAR, price INTEGER);\nINSERT INTO abandoned_checkout_shipping_line VALUES (10, 'alpha', 2), (10, 'alpha', 3), (20, 'alpha', 4);\nCREATE VIEW roll_up_shipping_line AS SELECT checkout_id, source_relation, SUM(price) AS price FROM abandoned_checkout_shipping_line GROUP BY checkout_id, source_relation;",
+  "before_sql": "SELECT d.id, d.amount, s.price\nFROM abandoned_checkout_discount_code AS d LEFT JOIN abandoned_checkout_shipping_line AS s\nON s.checkout_id = d.checkout_id AND s.source_relation = d.source_relation",
+  "after_sql": "SELECT d.id, d.amount, s.price\nFROM abandoned_checkout_discount_code AS d LEFT JOIN roll_up_shipping_line AS s\nON s.checkout_id = d.checkout_id AND s.source_relation = d.source_relation",
+  "key": "d.id",
+  "value": "1",
+  "expected_before": 2,
+  "expected_after": 1,
+  "expected_stage": "JOIN",
+  "source_before_url": "https://github.com/fivetran/dbt_shopify/blob/304c7ee7f4c1d229981b491c9bf2b60a7411f73b/models/intermediate/int_shopify__discounts__abandoned_checkouts.sql"
+}

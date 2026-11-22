@@ -1,0 +1,22 @@
+{
+  "id": "a5",
+  "title": "Zendesk resolution history excluded closed-only tickets",
+  "upstream": "https://github.com/fivetran/dbt_zendesk/pull/187",
+  "revision": "95bf3846d16ecb448b89e457927a3b2ce91bdf3a",
+  "source_url": "https://github.com/fivetran/dbt_zendesk/blob/1ad0a86859f8c589889e7a736130eadb04a4d6d2/models/resolution_times/int_zendesk__ticket_resolution_times_calendar.sql#L1-L7",
+  "evidence": "The merged calendar-resolution model changed the status-history filter to admit both solved and closed events, then uses a closed timestamp when a ticket has no solved timestamp. Closed-only histories previously supplied no row to the resolution-time aggregate.",
+  "source_form": "template",
+  "template_engine": "dbt",
+  "source_sql": "from {{ ref('int_zendesk__ticket_historical_status') }}\n    where status = 'solved'",
+  "replay_kind": "reduced",
+  "adaptation": "Replaces the dbt relation reference with a fixture table and replays only the input filter. The count measures qualifying history rows. The later resolution fallback and final ticket report are outside this replay.",
+  "setup_sql": "CREATE TABLE ticket_history (ticket_id INTEGER, status VARCHAR);\nINSERT INTO ticket_history VALUES (1, 'open'), (1, 'closed'), (2, 'solved'), (3, 'open');",
+  "before_sql": "SELECT h.ticket_id AS id, h.status FROM ticket_history AS h WHERE h.status = 'solved'",
+  "after_sql": "SELECT h.ticket_id AS id, h.status FROM ticket_history AS h WHERE h.status IN ('solved', 'closed')",
+  "key": "h.ticket_id",
+  "value": "1",
+  "expected_before": 0,
+  "expected_after": 1,
+  "expected_stage": "WHERE",
+  "source_before_url": "https://github.com/fivetran/dbt_zendesk/blob/1ad0a86859f8c589889e7a736130eadb04a4d6d2/models/resolution_times/int_zendesk__ticket_resolution_times_calendar.sql"
+}

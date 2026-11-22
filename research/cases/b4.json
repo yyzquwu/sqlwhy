@@ -1,0 +1,21 @@
+{
+  "id": "b4",
+  "title": "PrestaShop stock restrictions drop products without stock",
+  "upstream": "https://github.com/PrestaShop/PrestaShop/commit/4de6cc643f0b9219d91c9db3bc2bddb5bdfd5912",
+  "revision": "4de6cc643f0b9219d91c9db3bc2bddb5bdfd5912",
+  "source_url": "https://github.com/PrestaShop/PrestaShop/commit/4de6cc643f0b9219d91c9db3bc2bddb5bdfd5912.patch",
+  "source_before_url": "https://github.com/PrestaShop/PrestaShop/blob/31581b8d0d6d988cfe9daf97070437384f7b4bbc/classes/Product.php#L2677-L2701",
+  "evidence": "Product::sqlStock applied stock attribute and shop restrictions in WHERE when called with a query builder. The fix put the restrictions into the LEFT JOIN condition in the stock SQL used by the cart and new-product queries.",
+  "source_form": "generated",
+  "source_sql": "stock.id_product_attribute = 0",
+  "replay_kind": "reduced",
+  "adaptation": "The replay keeps the stock join and the zero-attribute branch, using one synthetic shop. It omits the separate shop and product filters, other product joins, table prefixes, and projections unrelated to the row loss.",
+  "setup_sql": "CREATE TABLE product (id_product INTEGER PRIMARY KEY);\nCREATE TABLE stock_available (id_product INTEGER, id_product_attribute INTEGER);\nINSERT INTO product VALUES (1), (2), (3);\nINSERT INTO stock_available VALUES (2, 0), (3, 4);",
+  "before_sql": "SELECT p.id_product AS id FROM product p LEFT JOIN stock_available stock ON stock.id_product = p.id_product WHERE stock.id_product_attribute = 0",
+  "after_sql": "SELECT p.id_product AS id FROM product p LEFT JOIN stock_available stock ON stock.id_product = p.id_product AND stock.id_product_attribute = 0",
+  "key": "p.id_product",
+  "value": "1",
+  "expected_before": 0,
+  "expected_after": 1,
+  "expected_stage": "WHERE"
+}

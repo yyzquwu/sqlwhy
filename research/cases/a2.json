@@ -1,0 +1,22 @@
+{
+  "id": "a2",
+  "title": "QuickBooks bill payments disappeared without an accounts-payable match",
+  "upstream": "https://github.com/fivetran/dbt_quickbooks/pull/109",
+  "revision": "d74221ddcbe58eca60977a50250b7e40334a4347",
+  "source_url": "https://github.com/fivetran/dbt_quickbooks/blob/74da53b53cc1acf0cd29275744263dd4757ce589/models/double_entry_transactions/int_quickbooks__bill_payment_double_entry.sql#L38-L55",
+  "evidence": "The v0.12.1 changelog and merged diff document an inner-to-left join change because the account lookup could be empty and remove transactions. This case uses the bill payment model among the five changed models.",
+  "source_form": "template",
+  "template_engine": "dbt",
+  "source_sql": "inner join ap_accounts\n    on ap_accounts.source_relation = bill_payments.source_relation",
+  "replay_kind": "reduced",
+  "adaptation": "Supplies synthetic inputs to bill_payment_join and selects only its transaction ID and account ID. The dbt staging and double-entry output steps are omitted.",
+  "setup_sql": "CREATE TABLE bill_payments (bill_payment_id INTEGER, source_relation VARCHAR);\nINSERT INTO bill_payments VALUES (1, 'alpha'), (2, 'beta');\nCREATE TABLE ap_accounts (account_id INTEGER, source_relation VARCHAR);\nINSERT INTO ap_accounts VALUES (900, 'beta');",
+  "before_sql": "SELECT p.bill_payment_id AS id, a.account_id\nFROM bill_payments AS p INNER JOIN ap_accounts AS a ON a.source_relation = p.source_relation",
+  "after_sql": "SELECT p.bill_payment_id AS id, a.account_id\nFROM bill_payments AS p LEFT JOIN ap_accounts AS a ON a.source_relation = p.source_relation",
+  "key": "p.bill_payment_id",
+  "value": "1",
+  "expected_before": 0,
+  "expected_after": 1,
+  "expected_stage": "JOIN",
+  "source_before_url": "https://github.com/fivetran/dbt_quickbooks/blob/74da53b53cc1acf0cd29275744263dd4757ce589/models/double_entry_transactions/int_quickbooks__bill_payment_double_entry.sql"
+}

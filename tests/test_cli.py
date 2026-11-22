@@ -37,6 +37,32 @@ def test_unmet_expectation_returns_one(capsys):
     assert "Expected present, got removed." in output.err
 
 
+@pytest.mark.parametrize(
+    ("status", "count", "errors"),
+    [
+        ("removed", "0", []),
+        ("removed", "1", ["Expected row count 1, got 0."]),
+        ("present", "0", ["Expected present, got removed."]),
+        ("present", "1", ["Expected present, got removed.", "Expected row count 1, got 0."]),
+    ],
+)
+def test_trace_checks_status_and_count_independently(status, count, errors, capsys):
+    assert main(["demo", "--json", "--expect", status, "--expect-rows", count]) == bool(errors)
+    output = capsys.readouterr()
+    assert json.loads(output.out)["output_rows"] == 0
+    assert output.err.splitlines() == errors
+
+
+@pytest.mark.parametrize("count", ["-1", "1.5", "many"])
+def test_invalid_row_count_returns_two(count, capsys):
+    with pytest.raises(SystemExit) as err:
+        main(["demo", "--json", "--expect-rows", count])
+    assert err.value.code == 2
+    out = capsys.readouterr()
+    assert not out.out
+    assert "--expect-rows: expected a nonnegative integer" in out.err
+
+
 @pytest.fixture
 def query_and_db(tmp_path):
     sql = tmp_path / "orders.sql"
@@ -81,7 +107,7 @@ def test_repeatable_file_tables_are_used(tmp_path, capsys):
     sql.write_text("SELECT o.id FROM orders o JOIN payments p ON o.id = p.order_id", encoding="utf-8")
     orders, payments = tmp_path / "orders.csv", tmp_path / "payments.csv"
     orders.write_text("id\n42\n", encoding="utf-8")
-    payments.write_text("order_id\n42\n", encoding="utf-8")
+    payments.write_text("order_id\n42\n42\n", encoding="utf-8")
     assert main([str(sql), "--table", f"orders={orders}", "--table", f"payments={payments}",
-                 "--trace", "o.id=42", "--expect", "present"]) == 0
+                 "--trace", "o.id=42", "--expect", "present", "--expect-rows", "2"]) == 0
     assert "Result  present" in capsys.readouterr().out
