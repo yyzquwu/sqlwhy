@@ -1,8 +1,10 @@
 """Trace rows identified by a key on a DuckDB SELECT's leftmost table."""
 
+import json
 import math
 import re
 from datetime import date, time
+from decimal import Decimal
 
 from .query import Query, needs_native_guard, parse_query
 
@@ -51,8 +53,19 @@ def _sample_columns(connection, plan):
     # Python datetimes lose sub-microsecond precision. Convert those specific
     # columns in DuckDB before transferring the nested samples to the client.
     types = {col: row[1] for col, row in zip(plan.where_columns, info, strict=True)}
-    return [f"replace(CAST({col} AS VARCHAR), ' ', 'T')" if kind in ("TIME_NS", "TIMESTAMP_NS") else col
-            for col, kind in types.items()], types
+    samples = []
+    for col, kind in types.items():
+        if kind in ("TIME_NS", "TIMESTAMP_NS"):
+            samples.append(f"replace(CAST({col} AS VARCHAR), ' ', 'T')")
+        elif _nested_ns(kind):
+            samples.append(f"to_json({col})")
+        else:
+            samples.append(col)
+    return samples, types
+
+
+def _nested_ns(kind):
+    return kind not in ("TIME_NS", "TIMESTAMP_NS") and re.search(r"\b(?:TIME|TIMESTAMP)_NS\b", kind) is not None
 
 
 def _scan(plan: Query, key: str, columns: list[str], native_only=False) -> tuple[str, int]:
@@ -140,7 +153,7 @@ def _join_stage(plan: Query, source: int, unmatched: int, joined: int) -> dict:
     }
 
 
-def _where_stage(plan: Query, joined: int, stats: list) -> dict:
+def _where_stage(plan: Query, joined: int, stats: list, types: dict) -> dict:
     if len(stats) == 1:
         kept = stats[0]
         return {
@@ -163,12 +176,18 @@ def _where_stage(plan: Query, joined: int, stats: list) -> dict:
         "truth_counts": counts,
         "samples": [
             {"outcome": outcome, "inputs": {
-                col: _json(row[f"input{i}"])
+                col: _sample_value(row[f"input{i}"], types[col])
                 for i, col in enumerate(plan.where_columns)}}
             for outcome, rows in zip(_TRUTH, samples)
             for row in rows or []
         ],
     }
+
+
+def _sample_value(value, kind):
+    if value is not None and _nested_ns(kind):
+        value = json.loads(value, parse_float=Decimal)
+    return _json(value)
 
 
 def trace_row(connection, sql: str, key: str, value) -> dict:
@@ -190,7 +209,7 @@ def trace_row(connection, sql: str, key: str, value) -> dict:
     if plan.join_sql:
         stages.append(_join_stage(plan, source, unmatched, joined))
     if plan.where_sql:
-        stages.append(_where_stage(plan, joined, where))
+        stages.append(_where_stage(plan, joined, where, types))
     output = stages[-1]["after"]
     return {
         "status": "present" if output else "removed" if source else "source_absent",

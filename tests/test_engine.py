@@ -137,3 +137,29 @@ def test_duckdb_prefix_aliases_cover_the_whole_relation(db):
     trace = trace_row(db, sql, "o.id", 42)
     assert trace["output_rows"] == len(db.execute(sql).fetchall()) == 2
     assert trace["stages"][1]["clause"].endswith("ON o.line=p.line")
+
+
+@pytest.mark.parametrize("predicate", [
+    "q between 1 and cast(amount as integer)",
+    "q in (0, cast(amount as integer))",
+])
+def test_guarded_range_and_membership(db, predicate):
+    db.execute("create table amounts as from (values (42,0,'bad'),(42,2,'3'),(42,9,'1')) t(id,q,amount)")
+    sql = f"select id from amounts where {predicate}"
+    assert db.execute(sql).fetchall() == [(42,)]
+    where = trace_row(db, sql, "id", 42)["stages"][-1]
+    assert where["truth_counts"] == {"TRUE": 1, "FALSE": None, "UNKNOWN": None, "UNCLASSIFIED": 2}
+
+
+@pytest.mark.parametrize("wrap", ["[{ts}]", "[[{ts}]]", "struct_pack(t := {ts})"])
+def test_nested_nanoseconds_survive_the_json_evidence_path(db, wrap):
+    start = wrap.format(ts="timestamp_ns '2026-11-21 00:00:00.000000001'")
+    end = wrap.format(ts="timestamp_ns '2026-11-21 00:00:00.000000002'")
+    db.execute(f"create table intervals as select 42 as id, {start} as starts, {end} as ends")
+    sql = "select id from intervals where ends > starts"
+    evidence = trace_row(db, sql, "id", 42)["stages"][-1]["samples"][0]
+    assert evidence["outcome"] == "TRUE"
+    for col, suffix in [('"ends"', '000000002'), ('"starts"', '000000001')]:
+        actual = evidence["inputs"][col]
+        assert isinstance(actual, (dict, list))
+        assert suffix in json.dumps(actual)

@@ -209,7 +209,7 @@ def parse_query(sql: str) -> Query:
 
 def needs_native_guard(expr, types):
     """Only project compound filters when their atoms require no fallible operation."""
-    if expr is None or expr.find(exp.And, exp.Or) is None:
+    if expr is None or expr.find(exp.And, exp.Or, exp.Between, exp.In) is None:
         return False
 
     def family(node):
@@ -232,6 +232,12 @@ def needs_native_guard(expr, types):
             return safe(node.this)
         if isinstance(node, exp.Is) and isinstance(node.expression, exp.Null):
             return isinstance(node.this, exp.Column)
+        if isinstance(node, (exp.Between, exp.In)):
+            options = [node.args["low"], node.args["high"]] if isinstance(node, exp.Between) else node.expressions
+            left = family(node.this)
+            return left in {"BOOLEAN", "VARCHAR", "number"} and all(
+                isinstance(item, exp.Null) or family(item) == left for item in options
+            )
         if isinstance(node, (exp.EQ, exp.NEQ, exp.LT, exp.LTE, exp.GT, exp.GTE)):
             left = family(node.this)
             return left in {"BOOLEAN", "VARCHAR", "number"} and left == family(node.expression)
