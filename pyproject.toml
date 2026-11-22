@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "sqlwhy"
+version = "0.1.0"
+description = "Follow one source key through a DuckDB join and WHERE filter."
+readme = "README.md"
+requires-python = ">=3.11"
+license = "MIT"
+authors = [{name = "Anson Huang"}]
+dependencies = ["duckdb>=1.5.6,<1.6", "sqlglot>=30.33,<31"]
+
+[project.optional-dependencies]
+test = ["pytest>=8,<10"]
+
+[project.scripts]
+sqlwhy = "sqlwhy.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
