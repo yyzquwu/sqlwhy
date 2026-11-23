@@ -1,0 +1,18 @@
+name: Unsupported SQL shape
+description: Report a DuckDB query that sqlwhy cannot audit or trace.
+body:
+  - type: textarea
+    id: sql
+    attributes:
+      label: Minimal sanitized SQL
+      description: Use placeholder names and synthetic values. Include only the clauses needed to show the unsupported shape.
+      render: sql
+    validations:
+      required: true
+  - type: textarea
+    id: behavior
+    attributes:
+      label: What happened?
+      description: Include the sqlwhy version, DuckDB version, command, and sanitized diagnostic. Describe the result you wanted to check.
+    validations:
+      required: true

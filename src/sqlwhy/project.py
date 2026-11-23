@@ -7,6 +7,7 @@ import duckdb
 from .audit import audit_rows
 from .diff import diff_rows
 from .files import TABLE_NAME, open_db, open_tables
+from .query import UnsupportedSQLShape
 
 
 def _fields(data, required, optional=()):
@@ -94,7 +95,8 @@ def check_project(path, *, limit=5) -> dict:
                     result = diff_rows(con, **args, limit=limit)
                     fails = result["changed_keys"]
             except (ValueError, duckdb.Error) as err:
-                raise ValueError(f"Check {name!r}: {err}") from err
+                error_type = UnsupportedSQLShape if isinstance(err, UnsupportedSQLShape) else ValueError
+                raise error_type(f"Check {name!r}: {err}") from err
             records.append(dict(name=name, type=kind, passed=fails == 0, result=result))
         con.commit()
     return dict(schema_version=1, failed_checks=sum(not r["passed"] for r in records), checks=records)

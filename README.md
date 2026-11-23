@@ -1,62 +1,41 @@
 # sqlwhy
 
-**Which step of your SQL report lost an order?** sqlwhy finds missing or duplicated keys and shows the CTE and clause where their counts changed. You can also compare two saved report outputs by key, check a metric that changed despite equal row counts, and keep the checks in CI.
+**Find where your DuckDB query lost or duplicated rows.** sqlwhy identifies the CTE and clause where a source key’s row count changed. You can also compare saved report outputs by key in CI.
+
+Install uv and Git. If the repository is private, configure Git credentials with read access. uv selects Python 3.12 and can download it if needed. [uv installation guide](https://docs.astral.sh/uv/getting-started/installation/)
 
 ```sh
-sqlwhy demo cte-audit
+uvx --python 3.12 --from git+https://github.com/yyzquwu/sqlwhy.git@v1.0.1 sqlwhy demo cte-audit
 ```
 
-Two orders go in and two rows come out. The audit finds both problems:
-
-```text
-o.id = 41  [expected 1, got 2]
-  [orders_with_payments] LEFT JOIN "payments" AS "p" ON p.order_id = o.id  [1 -> 2]
-o.id = 42  [expected 1, got 0]
-  [settled_orders] WHERE status = 'settled'  [1 -> 0]  FALSE 0, UNKNOWN 1 (SQL NULL)
-```
-
-This built-in example takes no files and intentionally exits **1**. Add `--json` for the complete trace.
+The demo takes no input files and exits **1** with **2 violations**. Two orders go in and two rows come out, but a join duplicates order 41 and a filter drops order 42.
 
 ![Terminal demo of sqlwhy finding a duplicated order and a missing order, then passing the repaired report](docs/audit.gif)
 
-## Install and try it
+### Use the release wheel
 
-With access to this repository, install the tagged version in a Python 3.11+ environment using your existing GitHub credentials:
-
-```sh
-python -m pip install "git+https://github.com/yyzquwu/sqlwhy.git@v1.0.0"
-sqlwhy --version
-sqlwhy demo cte-audit
-```
-
-The [private release](https://github.com/yyzquwu/sqlwhy/releases/tag/v1.0.0) also provides a wheel, source distribution and checksums. For a passing and a failing example on the same data, use the checkout walkthrough below.
-
-From a checkout, using Python 3.11 or later in a virtual environment:
+Download the wheel and run these commands in a Python 3.11+ virtual environment from the download directory. [v1.0.1 release](https://github.com/yyzquwu/sqlwhy/releases/tag/v1.0.1)
 
 ```sh
-python -m pip install .
-cd examples/audit
-sqlwhy audit cte_broken.sql --table orders=orders.csv --table payments=payments.csv --key o.id --expect-rows 1
-sqlwhy audit cte_report.sql --table orders=orders.csv --table payments=payments.csv --key o.id --expect-rows 1
+python -m pip install ./sqlwhy-1.0.1-py3-none-any.whl
+python -m sqlwhy demo cte-audit
 ```
 
-The report should include each order, even if it is awaiting payment. The first audit exits **1**. Order 41 matches two payments at the join. Order 42 survives the left join, then the filter drops it because its payment status is SQL NULL. The repaired report joins directly to the primary payment and keeps unpaid orders. The second audit exits **0**. [Broken SQL](examples/audit/cte_broken.sql) · [Repaired SQL](examples/audit/cte_report.sql)
+## Compare two report outputs
 
-## Audit your own query
-
-### Compare saved report outputs
-
-When a pull request changes a report, compare the base and candidate outputs built from the same input snapshot. The two inputs can be DuckDB tables or views, or named CSV or Parquet files. From the checkout root, this example reports two changed keys despite equal totals:
+Export the baseline and candidate reports from the same data snapshot. Replace the filenames and key below with yours. Both Parquet files should contain `order_id` with the same DuckDB type.
 
 ```sh
-sqlwhy diff old new --table old=examples/orders.csv --table new=examples/payments_fanout.csv --key id --after-key order_id
+uvx --python 3.12 --from git+https://github.com/yyzquwu/sqlwhy.git@v1.0.1 sqlwhy diff old new --table old=before.parquet --table new=after.parquet --key order_id
 ```
 
-Order 41 gains a row and order 42 disappears. Use `--db warehouse.duckdb` for database relations, `--limit 0` for totals, and `--json` for CI. Exit 1 means at least one key changed multiplicity. Exit 0 means every key had the same number of rows, and exit 2 means the comparison could not run. NULL forms one key. Text keys are compared by exact UTF-8 bytes and both key columns must have the same supported DuckDB type. Use audit or trace on a supported source query when you need to locate the responsible clause.
+Exit **0** means every key has the same row count in both files. Exit **1** means at least one key gained or lost rows. Exit **2** means the comparison could not run. Use `--after-key` if the candidate renamed the key, `--limit 0` for totals, or `--json` for CI. NULL forms one key. Text keys are compared by exact UTF-8 bytes, and both key columns must have the same supported DuckDB type. Use `--db warehouse.duckdb` to compare existing database relations.
+
+sqlwhy is tested with DuckDB `>=1.5.6,<1.6`. If your app uses DuckDB 2.x, export CSV or Parquet from the app and use the CLI on the exports from `uvx` or a dedicated virtual environment. Keep your app’s existing DuckDB environment.
 
 ### Compare values within each key
 
-To compare a metric even when row counts agree, add `--value` to the diff:
+To compare a metric even when row counts agree, add `--value` to the diff. The remaining CLI examples assume `sqlwhy` is installed in your active environment, or you can use the same `uvx` invocation as above.
 
 ```sh
 sqlwhy diff previous_discounts current_discounts --db warehouse.duckdb --key code --value discount_amount
@@ -64,7 +43,7 @@ sqlwhy diff previous_discounts current_discounts --db warehouse.duckdb --key cod
 
 Within each key, sqlwhy compares how often each value occurs on each side, including NULLs and duplicates. `modified_keys` counts keys whose number of rows stayed the same while values changed. Each displayed example includes up to one value that became less frequent and one that became more frequent. In the Shopify study fixture, rolling up shipping lines before the join changed the discount for `save5` from 10 to 5 with one output row on both sides. [Executable comparison](tests/test_diff_values.py)
 
-### Audit a source query
+## Audit your own query
 
 ```sh
 sqlwhy audit report.sql --db warehouse.duckdb --key o.id --expect-rows 1
@@ -75,6 +54,19 @@ Choose a column from the leftmost source table and include it directly in the SE
 The CLI counts every violation in one database snapshot. By default it explains up to five failing keys in ascending order, with NULL first. `--limit 0` returns the totals only. `--json` includes the totals and every trace stage for the displayed examples. Exit **0** means every key met the expectation, **1** means at least one violated it, and **2** means the audit could not run.
 
 Audit keys can be booleans, fixed-width integers, decimals, floating-point numbers, strings, blobs, or UUIDs. Temporal and nested key types are unsupported. Columns of those types can still appear elsewhere in a report.
+
+### Try the repair from the GIF
+
+From the checkout root in a Python 3.11+ virtual environment, run both reports on the same input files.
+
+```sh
+python -m pip install .
+cd examples/audit
+sqlwhy audit cte_broken.sql --table orders=orders.csv --table payments=payments.csv --key o.id --expect-rows 1
+sqlwhy audit cte_report.sql --table orders=orders.csv --table payments=payments.csv --key o.id --expect-rows 1
+```
+
+The first audit exits **1**. Order 41 matches two payments, and the filter drops order 42 because its payment status is SQL NULL. The repair joins directly to the primary payment and keeps unpaid orders. The second audit exits **0**. [Broken SQL](examples/audit/cte_broken.sql) · [Repaired SQL](examples/audit/cte_report.sql)
 
 ### Keep the checks with the report
 
@@ -146,6 +138,8 @@ Use `WITH step AS (SELECT id AS order_id ...)` to rename a key inside the projec
 DuckDB can push a later filter ahead of an earlier cast. A complete report may therefore succeed even if evaluating that earlier CTE on its own raises a conversion error. When a selected example encounters this, sqlwhy reports the CTE and the error. Use `audit --limit 0` to get the native report totals without evaluating intermediate examples.
 
 The trace measures row survival before projection. It does not evaluate the SELECT list for runtime conversion errors. Use deterministic source relations: repeated reads of a volatile view can produce different rows. The command is intended for trusted analytical queries and local inputs. The Python API uses the connection supplied by its caller. Trace output may include source values, so review it before attaching it to an issue.
+
+If sqlwhy cannot handle your query, share a minimal sanitized example. [Report an unsupported SQL shape](https://github.com/yyzquwu/sqlwhy/issues/new?template=unsupported-sql.yml)
 
 ## What happened on real SQL fixes?
 

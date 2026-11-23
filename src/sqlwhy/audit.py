@@ -5,7 +5,7 @@ from .engine import (
     _bind_chain, _columns, _cte_name, _key_column, _prepare_chain_trace, _prepare_trace,
     _trace, _trace_chain,
 )
-from .query import _FOLD, parse_query, projected_key
+from .query import UnsupportedSQLShape, _FOLD, parse_query, projected_key
 
 _KEY_TYPES = {
     "boolean", "tinyint", "smallint", "integer", "bigint", "hugeint",
@@ -85,7 +85,7 @@ def audit_rows(connection, sql: str, key: str, expected_rows: int, limit: int = 
         index = projected_key(plan, key_name, source_names,
                               _columns(connection, plan.right_sql), [col[0] for col in report])
         if report[index][1] != str(key_type):
-            raise ValueError("Audit requires the projected source key to keep its original type.")
+            raise UnsupportedSQLShape("Audit requires the projected source key to keep its original type.")
         statement = _audit_sql(plan, key_col, index, len(report), key_type.id == "varchar")
     expected = min(expected_rows, _BIGINT_MAX + 1)
     stats = connection.execute(statement, [expected, min(limit, _BIGINT_MAX), expected]).fetchone()

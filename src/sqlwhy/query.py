@@ -24,6 +24,10 @@ _CAST_TYPES = {
 }
 
 
+class UnsupportedSQLShape(ValueError):
+    """The query is outside the SQL shapes that sqlwhy can trace or audit."""
+
+
 @dataclass(frozen=True, slots=True)
 class Query:
     sql: str
@@ -60,10 +64,10 @@ def _table(node, clause, tokens):
                for p in node.parts)
         or _extra(node, {"this", "db", "catalog", "alias"})
     ):
-        raise ValueError(f"{clause} must name a table without derived sources, readers or table modifiers")
+        raise UnsupportedSQLShape(f"{clause} must name a table without derived sources, readers or table modifiers")
     alias = node.args.get("alias")
     if alias and (not isinstance(alias.this, exp.Identifier) or _extra(alias, {"this"})):
-        raise ValueError(f"{clause} does not support column aliases on a table")
+        raise UnsupportedSQLShape(f"{clause} does not support column aliases on a table")
     return node
 
 
@@ -79,22 +83,22 @@ def _column(node, names, star=False):
 def _scalar(expr, clause, names, sql):
     for node in expr.walk():
         if isinstance(node, exp.Column) and not _column(node, names):
-            raise ValueError(f"{clause} column references may use one source alias as qualifier")
+            raise UnsupportedSQLShape(f"{clause} column references may use one source alias as qualifier")
         if isinstance(node, exp.DataType) and (node.this not in _CAST_TYPES or node.expressions):
-            raise ValueError(f"{clause} only supports simple built-in cast types")
+            raise UnsupportedSQLShape(f"{clause} only supports simple built-in cast types")
         if isinstance(node, exp.In) and _extra(node, {"this", "expressions"}):
-            raise ValueError(f"{clause} IN only supports a list of scalar expressions")
+            raise UnsupportedSQLShape(f"{clause} IN only supports a list of scalar expressions")
         if type(node) in _SCALARS:
             continue
         if isinstance(node, exp.AggFunc):
-            raise ValueError(f"{clause} does not support aggregate functions")
+            raise UnsupportedSQLShape(f"{clause} does not support aggregate functions")
         if isinstance(node, exp.Window):
-            raise ValueError(f"{clause} does not support window functions")
+            raise UnsupportedSQLShape(f"{clause} does not support window functions")
         if isinstance(node, exp.Func):
             start, end = node.meta.get("start"), node.meta.get("end")
             name = sql[start:end + 1] if start is not None and end is not None else node.sql_name()
-            raise ValueError(f"{clause} does not support the {name.upper()} function")
-        raise ValueError(f"{clause} does not support {type(node).__name__} expressions")
+            raise UnsupportedSQLShape(f"{clause} does not support the {name.upper()} function")
+        raise UnsupportedSQLShape(f"{clause} does not support {type(node).__name__} expressions")
 
 
 def _unparen(node):
@@ -111,7 +115,7 @@ def _check_on(node, names):
     elif not isinstance(node, exp.EQ) or not all(
         _column(_unparen(op), names) for op in (node.this, node.expression)
     ):
-        raise ValueError("JOIN ON must compare two columns for equality, with optional AND conditions")
+        raise UnsupportedSQLShape("JOIN ON must compare two columns for equality, with optional AND conditions")
 
 
 def parse_query(sql: str) -> Query:
@@ -129,39 +133,41 @@ def parse_query(sql: str) -> Query:
         raise ValueError(f"Invalid DuckDB SQL: {e}") from e
 
     if isinstance(stmt, exp.SetOperation):
-        raise ValueError("SELECT set operations are unsupported")
+        raise UnsupportedSQLShape("SELECT set operations are unsupported")
     if isinstance(stmt, exp.Select) and stmt.args.get("with_"):
-        raise ValueError("SELECT WITH clauses are unsupported")
-    if not isinstance(stmt, exp.Select) or tokens[0].token_type != TT.SELECT:
+        raise UnsupportedSQLShape("SELECT WITH clauses are unsupported")
+    if not isinstance(stmt, exp.Select):
         raise ValueError("Expected a plain SELECT statement")
+    if tokens[0].token_type != TT.SELECT:
+        raise UnsupportedSQLShape("Expected a plain SELECT statement")
     extra = _extra(stmt, {"from_", "joins", "expressions", "where"})
     if extra:
-        raise ValueError(f"SELECT {extra} clauses are unsupported")
+        raise UnsupportedSQLShape(f"SELECT {extra} clauses are unsupported")
     src = stmt.args.get("from_")
     if not src or _extra(src, {"this"}):
-        raise ValueError("SELECT must have one base table in FROM")
+        raise UnsupportedSQLShape("SELECT must have one base table in FROM")
 
     token_types = {t.start: t.token_type for t in tokens}
     base = _table(src.this, "FROM", token_types)
     joins = stmt.args.get("joins", [])
     if len(joins) > 1:
-        raise ValueError("Only one JOIN is supported")
+        raise UnsupportedSQLShape("Only one JOIN is supported")
     join = joins[0] if joins else None
     right, kind = None, None
     names = {base.alias_or_name.translate(_FOLD)}
     if join:
         if join.args.get("using"):
-            raise ValueError("JOIN USING is unsupported")
+            raise UnsupportedSQLShape("JOIN USING is unsupported")
         if join.method:
-            raise ValueError(f"{join.method} JOIN is unsupported")
+            raise UnsupportedSQLShape(f"{join.method} JOIN is unsupported")
         if _extra(join, {"this", "side", "kind", "on"}):
-            raise ValueError("JOIN modifiers are unsupported")
+            raise UnsupportedSQLShape("JOIN modifiers are unsupported")
         if (join.side, join.kind) in {("", ""), ("", "INNER")}:
             kind = "inner"
         elif (join.side, join.kind) in {("LEFT", ""), ("LEFT", "OUTER")}:
             kind = "left"
         else:
-            raise ValueError("Only INNER JOIN and LEFT JOIN are supported")
+            raise UnsupportedSQLShape("Only INNER JOIN and LEFT JOIN are supported")
         right = _table(join.this, "JOIN", token_types)
         names.add(right.alias_or_name.translate(_FOLD))
         if len(names) != 2:
@@ -179,9 +185,9 @@ def parse_query(sql: str) -> Query:
         star = expr if isinstance(expr, exp.Star) else expr.this if isinstance(expr, exp.Column) else None
         if proj is expr and isinstance(star, exp.Star):
             if _extra(star, set()):
-                raise ValueError("SELECT wildcard modifiers are unsupported")
+                raise UnsupportedSQLShape("SELECT wildcard modifiers are unsupported")
             if expr is not star and not _column(expr, names, star=True):
-                raise ValueError("SELECT wildcards may use one source alias as qualifier")
+                raise UnsupportedSQLShape("SELECT wildcards may use one source alias as qualifier")
         else:
             _scalar(expr, "SELECT", names, sql)
 
@@ -191,7 +197,7 @@ def parse_query(sql: str) -> Query:
         _scalar(where.this, "WHERE", names, sql)
         cols = list(where.find_all(exp.Column, bfs=False))
         if any(not c.table and c.name.translate(_FOLD) in aliases for c in cols):
-            raise ValueError("WHERE may not reference an unqualified SELECT alias")
+            raise UnsupportedSQLShape("WHERE may not reference an unqualified SELECT alias")
         where_columns = tuple(dict.fromkeys(map(_render, cols)))
 
     # SQLGlot can normalize DuckDB syntax with different semantics, such as IN lists.
@@ -241,12 +247,12 @@ def _projected_keys(plan: Query, key_names, source_names, right_names, output_na
         raise ValueError("Audit could not determine the report's projected columns.")
     matches = [i for i, is_key in enumerate(origins) if is_key]
     if not matches:
-        raise ValueError("Audit requires the source key to be projected directly in SELECT.")
+        raise UnsupportedSQLShape("Audit requires the source key to be projected directly in SELECT.")
     names = [name.translate(_FOLD) for name in output_names]
     counts = Counter(names)
     unique = tuple(i for i in matches if counts[names[i]] == 1)
     if not unique:
-        raise ValueError("Audit found an ambiguous projected source key. Give a direct key projection a unique name.")
+        raise UnsupportedSQLShape("Audit found an ambiguous projected source key. Give a direct key projection a unique name.")
     return unique
 
 

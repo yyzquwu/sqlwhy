@@ -8,7 +8,7 @@ from datetime import date, time
 import duckdb
 
 from .chain import ChainStep, _label, parse_chain
-from .query import _FOLD, Query, _projected_keys, needs_native_guard, parse_query
+from .query import _FOLD, Query, UnsupportedSQLShape, _projected_keys, needs_native_guard, parse_query
 
 _ID = r'(?:"(?:[^"]|"")+"|[^\W\d][\w$]*)'
 _KEY = re.compile(rf"(?:(?P<qual>{_ID})\s*\.\s*)?(?P<col>{_ID})")
@@ -292,12 +292,13 @@ def _bind_chain(connection, steps, key):
             indices = _projected_keys(plan, key_names, source_names, _columns(connection, plan.right_sql, prefix),
                                       [column[0] for column in report])
             if any(report[i][1] != str(key_type) for i in indices):
-                raise ValueError("requires the projected source key to keep its original type.")
+                raise UnsupportedSQLShape("requires the projected source key to keep its original type.")
         except ValueError as err:
             message = str(err)
             if message.startswith("Audit "):
                 message = "This step " + message.removeprefix("Audit ")
-            raise ValueError(f"{_label(step.name)}: {message}") from err
+            error_type = UnsupportedSQLShape if isinstance(err, UnsupportedSQLShape) else ValueError
+            raise error_type(f"{_label(step.name)}: {message}") from err
         except (duckdb.BinderException, duckdb.CatalogException, duckdb.ParserException) as err:
             raise type(err)(f"{_label(step.name)}: {err}") from err
         bound.append((step, key_col))

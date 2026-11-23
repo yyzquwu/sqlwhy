@@ -4,8 +4,9 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "sqlwhy"
-version = "1.0.0"
-description = "Find missing or duplicated source keys in DuckDB reports and trace their joins and filters."
+version = "1.0.1"
+description = "Find the join or filter that lost or duplicated a row in DuckDB, and compare report outputs by key."
+keywords = ["duckdb", "sql", "data-quality", "analytics-engineering"]
 readme = "README.md"
 requires-python = ">=3.11"
 license = "MIT"

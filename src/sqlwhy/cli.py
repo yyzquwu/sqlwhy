@@ -14,6 +14,7 @@ from .diff import diff_rows
 from .engine import trace_row
 from .files import open_db, open_tables
 from .project import check_project
+from .query import UnsupportedSQLShape
 
 STATUSES = ("present", "removed", "source_absent")
 
@@ -82,11 +83,20 @@ def _parser(command):
         "  sqlwhy check sqlwhy.toml\n"
         "  sqlwhy demo cte-audit\n\n"
     )
+    overview = (
+        "Find missing or duplicated source keys in DuckDB query results.\n\n"
+        "Commands\n"
+        "  QUERY.sql   Trace one source key through a query's joins and filters.\n"
+        "  audit       Check expected row counts for every source key.\n"
+        "  diff        Compare saved outputs by key, optionally checking values.\n"
+        "  check       Run a TOML suite of audit and diff checks.\n"
+        "  demo        Try a built-in example with sample data."
+    )
     parser = argparse.ArgumentParser(
         prog=f"sqlwhy {command}" if command else "sqlwhy",
         description=("Run a built-in row trace or CTE audit." if demo else
                      "Check the report row count for every source key." if audit else
-                     "Trace a source row through the joins and WHERE clause of a SQL query."),
+                     overview),
         epilog=None if audit else ("" if demo else examples) + "Built-in demos\n" + names,
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
@@ -192,6 +202,16 @@ def _show_diff(result):
         print(f"Equal-count keys with changed values: {result['modified_keys']}")
 
 
+def _cli_error(parser, err):
+    msg = str(err)
+    if isinstance(err, UnsupportedSQLShape):
+        msg += ("\n\nSave the query outputs as tables or views in the same DuckDB database and compare them.\n"
+                "  sqlwhy diff BEFORE AFTER --db ... --key ...\n"
+                "Report an unsupported SQL shape at "
+                "https://github.com/yyzquwu/sqlwhy/issues/new?template=unsupported-sql.yml")
+    parser.error(msg)
+
+
 def main(argv=None):
     console = argv is None
     if console:
@@ -207,7 +227,7 @@ def main(argv=None):
         try:
             report = check_project(args.project, limit=args.limit)
         except (OSError, ValueError, duckdb.Error) as err:
-            parser.error(str(err))
+            _cli_error(parser, err)
         if args.json:
             print(json.dumps(report, indent=2))
         elif args.markdown:
@@ -260,7 +280,7 @@ def main(argv=None):
                 result = trace_row(con, sql, key, value)
             con.commit()
     except (OSError, ValueError, duckdb.Error) as err:
-        parser.error(str(err))
+        _cli_error(parser, err)
     if args.json:
         print(json.dumps(result, indent=2, default=str))
     elif command == "diff":

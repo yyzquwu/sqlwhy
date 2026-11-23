@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from sqlglot.errors import TokenError
 from sqlglot.tokens import TokenType as TT
 
-from .query import Query, _DUCKDB, _FOLD, parse_query
+from .query import Query, UnsupportedSQLShape, _DUCKDB, _FOLD, parse_query
 
 
 @dataclass(frozen=True, slots=True)
@@ -31,8 +31,9 @@ def _label(name):
 def _step(sql, start, end, prefix_end, name):
     try:
         query = parse_query(sql[start:end])
-    except ValueError as e:
-        raise ValueError(f"{_label(name)}: {e}") from e
+    except ValueError as err:
+        error_type = UnsupportedSQLShape if isinstance(err, UnsupportedSQLShape) else ValueError
+        raise error_type(f"{_label(name)}: {err}") from err
     return ChainStep(name, query, sql, prefix_end)
 
 
@@ -61,11 +62,11 @@ def _plan(sql, spans, names):
         base = q.base_name.translate(_FOLD)
         if previous is None:
             if not q.base_qualified and base in names:
-                raise ValueError(f"{label}: FROM uses CTE name {q.base_name!r}. Qualify the physical table.")
+                raise UnsupportedSQLShape(f"{label}: FROM uses CTE name {q.base_name!r}. Qualify the physical table.")
         elif q.base_qualified or base != previous.translate(_FOLD):
-            raise ValueError(f"{label}: FROM must reference preceding CTE {previous!r}, got {q.base_sql}")
+            raise UnsupportedSQLShape(f"{label}: FROM must reference preceding CTE {previous!r}, got {q.base_sql}")
         if q.right_name and not q.right_qualified and q.right_name.translate(_FOLD) in names:
-            raise ValueError(f"{label}: JOIN must use a physical lookup table, got CTE {q.right_name!r}")
+            raise UnsupportedSQLShape(f"{label}: JOIN must use a physical lookup table, got CTE {q.right_name!r}")
         previous = step.name
         steps.append(step)
     return tuple(steps)
@@ -81,7 +82,7 @@ def parse_chain(sql: str) -> tuple[ChainStep, ...] | None:
         return None
     if (len(tokens) > 2 and tokens[1].token_type == TT.RECURSIVE
             and tokens[2].token_type not in (TT.ALIAS, TT.L_PAREN)):
-        raise ValueError(f"{_label(tokens[2].text)}: WITH RECURSIVE is unsupported")
+        raise UnsupportedSQLShape(f"{_label(tokens[2].text)}: WITH RECURSIVE is unsupported")
 
     spans, names = [], set()
     try:
@@ -109,7 +110,12 @@ def _spans(sql, tokens, names):
         names.add(folded)
         as_body = tokens[i + 1:i + 3]
         if [t.token_type for t in as_body] != [TT.ALIAS, TT.L_PAREN]:
-            raise ValueError(f"{label}: expected AS (SELECT ...). CTE column lists and modifiers are unsupported.")
+            col_list = as_body and as_body[0].token_type == TT.L_PAREN
+            modifier = as_body and as_body[0].token_type == TT.ALIAS and (
+                [t.text.upper() for t in tokens[i + 2:i + 4]] in (["MATERIALIZED", "("], ["NOT", "MATERIALIZED"])
+            )
+            error_type = UnsupportedSQLShape if col_list or modifier else ValueError
+            raise error_type(f"{label}: expected AS (SELECT ...). CTE column lists and modifiers are unsupported.")
         end = _body_end(tokens, i + 3, name)
         yield as_body[-1].end + 1, tokens[end].start, prefix_end, name
         i = end + 1
