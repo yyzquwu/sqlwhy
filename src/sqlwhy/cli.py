@@ -10,7 +10,8 @@ from .audit import audit_rows
 from .demo import DEMOS, open_demo, trace_flat_counts
 from .diff import diff_rows
 from .engine import trace_row
-from .files import SAFE_CONFIG, open_tables
+from .files import open_db, open_tables
+from .project import check_project
 
 STATUSES = ("present", "removed", "source_absent")
 
@@ -49,6 +50,12 @@ def _inputs(parser):
 
 
 def _parser(command):
+    if command == "check":
+        parser = argparse.ArgumentParser(prog="sqlwhy check", description="Run the audit and diff checks in a TOML suite.")
+        parser.add_argument("project", type=Path, help="path to the project TOML")
+        parser.add_argument("--limit", type=_nonnegative_int, default=5, help="maximum examples per check")
+        parser.add_argument("--json", action="store_true", help="print the versioned suite report")
+        return parser
     if command == "diff":
         parser = argparse.ArgumentParser(prog="sqlwhy diff", description="Compare two outputs by key multiplicity.")
         parser.add_argument("before", help="baseline table or view")
@@ -68,6 +75,7 @@ def _parser(command):
         "  sqlwhy report.sql --table orders=orders.csv --trace orders.id=42\n"
         "  sqlwhy audit report.sql --db audit.duckdb --key orders.id --expect-rows 1\n"
         "  sqlwhy diff previous_orders current_orders --key order_id --db audit.duckdb\n"
+        "  sqlwhy check sqlwhy.toml\n"
         "  sqlwhy demo cte-audit\n\n"
     )
     parser = argparse.ArgumentParser(
@@ -99,12 +107,6 @@ def _parser(command):
                         help="exit 1 when any source key has a different report row count"
                         if audit else "expected report rows per source key")
     return parser
-
-
-def _open_db(path):
-    if not path.is_file():
-        raise ValueError(f"database file does not exist or is not a file: {path}")
-    return duckdb.connect(str(path.resolve()), read_only=True, config=SAFE_CONFIG)
 
 
 def _literal(value):
@@ -190,10 +192,24 @@ def main(argv=None):
             if getattr(stream, "reconfigure", None):
                 stream.reconfigure(errors="backslashreplace")
         argv = sys.argv[1:]
-    command = argv[0] if argv and argv[0] in ("demo", "audit", "diff") else None
+    command = argv[0] if argv and argv[0] in ("demo", "audit", "diff", "check") else None
     demo, audit = command == "demo", command == "audit"
     parser = _parser(command)
     args = parser.parse_args(argv[1:] if command else argv)
+    if command == "check":
+        try:
+            report = check_project(args.project, limit=args.limit)
+        except (OSError, ValueError, duckdb.Error) as err:
+            parser.error(str(err))
+        if args.json:
+            print(json.dumps(report, indent=2))
+        else:
+            for row in report["checks"]:
+                print(f"{'PASS' if row['passed'] else 'FAIL'}  {row['name']}")
+                if not row["passed"]:
+                    (_show_audit if row["type"] == "audit" else _show_diff)(row["result"])
+            print(f"{len(report['checks'])} checks, {report['failed_checks']} failed")
+        return int(report["failed_checks"] > 0)
     flat = demo and args.name == "flat-counts"
     cte_demo = demo and args.name == "cte-audit"
     if demo and args.limit is not None and not cte_demo:
@@ -209,7 +225,7 @@ def main(argv=None):
         else:
             if command != "diff":
                 sql = args.sql_file.read_text(encoding="utf-8-sig")
-            con = _open_db(args.db) if args.db else open_tables(args.table)
+            con = open_db(args.db) if args.db else open_tables(args.table)
         with con:
             con.execute("BEGIN TRANSACTION READ ONLY")
             if command == "diff":

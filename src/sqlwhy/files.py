@@ -13,6 +13,12 @@ SAFE_CONFIG = {
 }
 
 
+def open_db(path):
+    if not path.is_file():
+        raise ValueError(f"database file does not exist or is not a file: {path}")
+    return duckdb.connect(str(path.resolve()), read_only=True, config=SAFE_CONFIG)
+
+
 def open_tables(specs):
     """Materialize named CSV/Parquet files, then disable external access for tracing."""
     tables = {}

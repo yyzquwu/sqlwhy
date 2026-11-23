@@ -1,0 +1,20 @@
+version = 1
+
+[tables]
+orders = "orders.csv"
+payments = "payments.csv"
+expected_orders = "../orders.csv"
+
+[[checks]]
+name = "Keep every order in the payment report"
+type = "audit"
+sql = "cte_report.sql"
+key = "o.id"
+expect_rows = 1
+
+[[checks]]
+name = "Input order IDs match the saved snapshot"
+type = "diff"
+before = "expected_orders"
+after = "orders"
+key = "id"

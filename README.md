@@ -66,12 +66,13 @@ The CLI counts every violation in one database snapshot. By default it explains 
 
 Audit keys can be booleans, fixed-width integers, decimals, floating-point numbers, strings, blobs, or UUIDs. Temporal and nested key types are unsupported. Columns of those types can still appear elsewhere in a report.
 
-To use this check in GitHub Actions after installing sqlwhy, add a step like the one exercised by this repository. Change the query, files, and key to match your report. [CI workflow](.github/workflows/test.yml)
+### Keep the checks with the report
+
+Put recurring audits and diffs in a versioned TOML file. Choose a DuckDB `database` file or map named CSV and Parquet inputs in `[tables]`. Paths resolve from the TOML file. The command runs every check in one read-only transaction, includes failing checks in the report, and exits **1** if any expectation failed. An invalid configuration or query exits **2** with a diagnostic on stderr. [Runnable suite](examples/audit/sqlwhy.toml) · [CI workflow](.github/workflows/test.yml)
 
 ```yaml
-- name: Require one report row per order
-  working-directory: examples/audit
-  run: sqlwhy audit cte_report.sql --table orders=orders.csv --table payments=payments.csv --key o.id --expect-rows 1
+- name: Check reports
+  run: sqlwhy check examples/audit/sqlwhy.toml
 ```
 
 For measured timings, fixture size, hardware, and a command to repeat the run, see the [audit benchmark](benchmarks/README.md).
