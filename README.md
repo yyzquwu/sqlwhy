@@ -2,22 +2,20 @@
 
 **Find where your DuckDB query lost or duplicated rows.** sqlwhy identifies the CTE and clause where a source key’s row count changed. You can also compare saved report outputs by key in CI.
 
-Install uv and Git. If the repository is private, configure Git credentials with read access. uv selects Python 3.12 and can download it if needed. [uv installation guide](https://docs.astral.sh/uv/getting-started/installation/)
-
 ```sh
-uvx --python 3.12 --from git+https://github.com/yyzquwu/sqlwhy.git@v1.0.1 sqlwhy demo cte-audit
+uvx sqlwhy demo cte-audit
 ```
 
-The demo takes no input files and exits **1** with **2 violations**. Two orders go in and two rows come out, but a join duplicates order 41 and a filter drops order 42.
+The demo takes no input files and is expected to report **2 violations** and exit with status **1**. Two orders go in and two rows come out, but a join duplicates order 41 and a filter drops order 42. [uv installation guide](https://docs.astral.sh/uv/getting-started/installation/)
 
-![Terminal demo of sqlwhy finding a duplicated order and a missing order, then passing the repaired report](docs/audit.gif)
+![Terminal demo of sqlwhy finding a duplicated order and a missing order, then passing the repaired report](https://raw.githubusercontent.com/yyzquwu/sqlwhy/v1.0.1/docs/audit.gif)
 
-### Use the release wheel
+### Install with pip
 
-Download the wheel and run these commands in a Python 3.11+ virtual environment from the download directory. [v1.0.1 release](https://github.com/yyzquwu/sqlwhy/releases/tag/v1.0.1)
+You can also install from PyPI in a Python 3.11+ virtual environment.
 
 ```sh
-python -m pip install ./sqlwhy-1.0.1-py3-none-any.whl
+python -m pip install sqlwhy
 python -m sqlwhy demo cte-audit
 ```
 
@@ -26,7 +24,7 @@ python -m sqlwhy demo cte-audit
 Export the baseline and candidate reports from the same data snapshot. Replace the filenames and key below with yours. Both Parquet files should contain `order_id` with the same DuckDB type.
 
 ```sh
-uvx --python 3.12 --from git+https://github.com/yyzquwu/sqlwhy.git@v1.0.1 sqlwhy diff old new --table old=before.parquet --table new=after.parquet --key order_id
+uvx sqlwhy diff old new --table old=before.parquet --table new=after.parquet --key order_id
 ```
 
 Exit **0** means every key has the same row count in both files. Exit **1** means at least one key gained or lost rows. Exit **2** means the comparison could not run. Use `--after-key` if the candidate renamed the key, `--limit 0` for totals, or `--json` for CI. NULL forms one key. Text keys are compared by exact UTF-8 bytes, and both key columns must have the same supported DuckDB type. Use `--db warehouse.duckdb` to compare existing database relations.
@@ -35,13 +33,13 @@ sqlwhy is tested with DuckDB `>=1.5.6,<1.6`. If your app uses DuckDB 2.x, export
 
 ### Compare values within each key
 
-To compare a metric even when row counts agree, add `--value` to the diff. The remaining CLI examples assume `sqlwhy` is installed in your active environment, or you can use the same `uvx` invocation as above.
+To compare a metric even when row counts agree, add `--value` to the diff. For the remaining examples, use `sqlwhy` or `python -m sqlwhy` after installing with pip, or prefix `sqlwhy` with `uvx`.
 
 ```sh
 sqlwhy diff previous_discounts current_discounts --db warehouse.duckdb --key code --value discount_amount
 ```
 
-Within each key, sqlwhy compares how often each value occurs on each side, including NULLs and duplicates. `modified_keys` counts keys whose number of rows stayed the same while values changed. Each displayed example includes up to one value that became less frequent and one that became more frequent. In the Shopify study fixture, rolling up shipping lines before the join changed the discount for `save5` from 10 to 5 with one output row on both sides. [Executable comparison](tests/test_diff_values.py)
+Within each key, sqlwhy compares how often each value occurs on each side, including NULLs and duplicates. `modified_keys` counts keys whose number of rows stayed the same while values changed. Each displayed example includes up to one value that became less frequent and one that became more frequent. In the Shopify study fixture, rolling up shipping lines before the join changed the discount for `save5` from 10 to 5 with one output row on both sides. [Executable comparison](https://github.com/yyzquwu/sqlwhy/blob/v1.0.1/tests/test_diff_values.py)
 
 ## Audit your own query
 
@@ -57,20 +55,19 @@ Audit keys can be booleans, fixed-width integers, decimals, floating-point numbe
 
 ### Try the repair from the GIF
 
-From the checkout root in a Python 3.11+ virtual environment, run both reports on the same input files.
+From the checkout root, run both reports on the same input files.
 
 ```sh
-python -m pip install .
 cd examples/audit
 sqlwhy audit cte_broken.sql --table orders=orders.csv --table payments=payments.csv --key o.id --expect-rows 1
 sqlwhy audit cte_report.sql --table orders=orders.csv --table payments=payments.csv --key o.id --expect-rows 1
 ```
 
-The first audit exits **1**. Order 41 matches two payments, and the filter drops order 42 because its payment status is SQL NULL. The repair joins directly to the primary payment and keeps unpaid orders. The second audit exits **0**. [Broken SQL](examples/audit/cte_broken.sql) · [Repaired SQL](examples/audit/cte_report.sql)
+The first audit exits **1**. Order 41 matches two payments, and the filter drops order 42 because its payment status is SQL NULL. The repair joins directly to the primary payment and keeps unpaid orders. The second audit exits **0**. [Broken SQL](https://github.com/yyzquwu/sqlwhy/blob/v1.0.1/examples/audit/cte_broken.sql) · [Repaired SQL](https://github.com/yyzquwu/sqlwhy/blob/v1.0.1/examples/audit/cte_report.sql)
 
 ### Keep the checks with the report
 
-Put recurring audits and diffs in a versioned TOML file. Choose a DuckDB `database` file or map named CSV and Parquet inputs in `[tables]`. Paths resolve from the TOML file. The command runs every check in one read-only transaction, includes failing checks in the report, and exits **1** if any expectation failed. An invalid configuration or query exits **2** with a diagnostic on stderr. [Runnable suite](examples/audit/sqlwhy.toml) · [CI workflow](.github/workflows/test.yml)
+Put recurring audits and diffs in a versioned TOML file. Choose a DuckDB `database` file or map named CSV and Parquet inputs in `[tables]`. Paths resolve from the TOML file. The command runs every check in one read-only transaction, includes failing checks in the report, and exits **1** if any expectation failed. An invalid configuration or query exits **2** with a diagnostic on stderr. [Runnable suite](https://github.com/yyzquwu/sqlwhy/blob/v1.0.1/examples/audit/sqlwhy.toml) · [CI workflow](https://github.com/yyzquwu/sqlwhy/blob/v1.0.1/.github/workflows/test.yml)
 
 ```yaml
 - name: Check reports
@@ -78,9 +75,9 @@ Put recurring audits and diffs in a versioned TOML file. Choose a DuckDB `databa
   run: sqlwhy check examples/audit/sqlwhy.toml --markdown >> "$GITHUB_STEP_SUMMARY"
 ```
 
-For measured timings, fixture size, hardware, and a command to repeat the run, see the [audit benchmark](benchmarks/README.md).
+For measured timings, fixture size, hardware, and a command to repeat the run, see the [audit benchmark](https://github.com/yyzquwu/sqlwhy/blob/v1.0.1/benchmarks/README.md).
 
-See the [1.x CLI, suite format and Python API contracts](docs/contracts.md) for exit codes, JSON fields, comparison semantics and the compatibility policy.
+See the 1.x contracts for exit codes, JSON fields, comparison semantics, and the compatibility policy. [CLI, suite format and Python API contracts](https://github.com/yyzquwu/sqlwhy/blob/v1.0.1/docs/contracts.md)
 
 ## Trace your own query
 
@@ -145,9 +142,9 @@ If sqlwhy cannot handle your query, share a minimal sanitized example. [Report a
 
 MIT Open Learning fixed a blank discussion chart after finding that two tables used different names for the same platform. On synthetic tables, sqlwhy traced the original report query unchanged and showed the target disappearing at its inner join. A second published example hit a real limit. DuckDB executed the Stash issue reporter's query, but its `SELECT DISTINCT` prevents sqlwhy from tracing it.
 
-We selected ten public fixes involving missing or duplicated rows. Isolating the affected joins and filters made all ten pre-fix examples traceable. Two repaired examples still use unsupported query forms. Each case records the source, the reductions made, and the observed counts. The study measures behavior on selected fixtures. It does not estimate coverage of arbitrary SQL. [Ten-case results and sources](research/results.md)
+We selected ten public fixes involving missing or duplicated rows. Isolating the affected joins and filters made all ten pre-fix examples traceable. Two repaired examples still use unsupported query forms. Each case records the source, the reductions made, and the observed counts. The study measures behavior on selected fixtures. It does not estimate coverage of arbitrary SQL. [Ten-case results and sources](https://github.com/yyzquwu/sqlwhy/blob/v1.0.1/research/results.md)
 
-Run `python research/replay.py` to reproduce the original table offline. For v0.4, we tested compiled DuckDB SQL separately, including a Jaffle Shop staging model and a deliberately faulty variant. [dbt compilation and compatibility results](research/dbt/README.md)
+Run `python research/replay.py` to reproduce the original table offline. For v0.4, we tested compiled DuckDB SQL separately, including a Jaffle Shop staging model and a deliberately faulty variant. [dbt compilation and compatibility results](https://github.com/yyzquwu/sqlwhy/blob/v1.0.1/research/dbt/README.md)
 
 ## Development
 
