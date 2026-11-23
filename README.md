@@ -3,7 +3,7 @@
 **Find where your DuckDB query lost or duplicated rows.** sqlwhy identifies the CTE and clause where a source key’s row count changed. You can also compare saved report outputs by key in CI.
 
 ```sh
-uvx sqlwhy demo cte-audit
+uvx --python 3.12 sqlwhy demo cte-audit
 ```
 
 The demo takes no input files and is expected to report **2 violations** and exit with status **1**. Two orders go in and two rows come out, but a join duplicates order 41 and a filter drops order 42. [uv installation guide](https://docs.astral.sh/uv/getting-started/installation/)
@@ -12,7 +12,7 @@ The demo takes no input files and is expected to report **2 violations** and exi
 
 ### Install with pip
 
-You can also install from PyPI in a Python 3.11+ virtual environment.
+You can also install from PyPI in a Python 3.12 virtual environment.
 
 ```sh
 python -m pip install sqlwhy
@@ -24,7 +24,7 @@ python -m sqlwhy demo cte-audit
 Export the baseline and candidate reports from the same data snapshot. Replace the filenames and key below with yours. Both Parquet files should contain `order_id` with the same DuckDB type.
 
 ```sh
-uvx sqlwhy diff old new --table old=before.parquet --table new=after.parquet --key order_id
+uvx --python 3.12 sqlwhy diff old new --table old=before.parquet --table new=after.parquet --key order_id
 ```
 
 Exit **0** means every key has the same row count in both files. Exit **1** means at least one key gained or lost rows. Exit **2** means the comparison could not run. Use `--after-key` if the candidate renamed the key, `--limit 0` for totals, or `--json` for CI. NULL forms one key. Text keys are compared by exact UTF-8 bytes, and both key columns must have the same supported DuckDB type. Use `--db warehouse.duckdb` to compare existing database relations.
@@ -33,7 +33,7 @@ sqlwhy is tested with DuckDB `>=1.5.6,<1.6`. If your app uses DuckDB 2.x, export
 
 ### Compare values within each key
 
-To compare a metric even when row counts agree, add `--value` to the diff. For the remaining examples, use `sqlwhy` or `python -m sqlwhy` after installing with pip, or prefix `sqlwhy` with `uvx`.
+To compare a metric even when row counts agree, add `--value` to the diff. For the remaining examples, use `sqlwhy` or `python -m sqlwhy` after installing with pip, or prefix `sqlwhy` with `uvx --python 3.12`.
 
 ```sh
 sqlwhy diff previous_discounts current_discounts --db warehouse.duckdb --key code --value discount_amount
