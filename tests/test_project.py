@@ -54,9 +54,10 @@ value = "amt"
     p = subprocess.run(args, capture_output=True, text=True)
     assert p.returncode == 1 and json.loads(p.stdout)['failed_checks'] == 2
     summary = subprocess.run([*args[:-1], '--markdown'], capture_output=True, text=True, encoding='utf-8',
-                             env={**os.environ, 'PYTHONIOENCODING': 'utf-8'})
+                             env={**os.environ, 'PYTHONIOENCODING': 'cp1252:strict'})
     assert summary.returncode == 1 and not summary.stderr
-    assert '**FAIL** <code>metric</code> (1 changed keys)' in summary.stdout
+    assert '**FAIL** <code>metric</code> (1 changed key)' in summary.stdout
+    assert '**FAIL** <code>count</code> (1 violation)' in summary.stdout
     assert '### sqlwhy' in summary.stdout and '2 checks, 2 failed' in summary.stdout
     assert 'decreased_value' not in summary.stdout
     cfg.write_text(cfg.read_text().replace('value = "amt"', 'value = "actuall"'))

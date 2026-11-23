@@ -193,7 +193,8 @@ def _show_diff(result):
 
 
 def main(argv=None):
-    if argv is None:
+    console = argv is None
+    if console:
         for stream in (sys.stdout, sys.stderr):
             if getattr(stream, "reconfigure", None):
                 stream.reconfigure(errors="backslashreplace")
@@ -210,13 +211,16 @@ def main(argv=None):
         if args.json:
             print(json.dumps(report, indent=2))
         elif args.markdown:
+            if console and getattr(sys.stdout, "reconfigure", None):
+                sys.stdout.reconfigure(encoding="utf-8", errors="backslashreplace")
             print(f"### sqlwhy · {len(report['checks'])} checks, {report['failed_checks']} failed\n")
             for row in report["checks"]:
                 audit = row["type"] == "audit"
                 count = row["result"]["violation_count" if audit else "changed_keys"]
+                unit = "violation" if audit else "changed key"
                 name = html.escape(" ".join(row["name"].splitlines()))
                 print(f"- **{'PASS' if row['passed'] else 'FAIL'}** <code>{name}</code> "
-                      f"({count} {'violations' if audit else 'changed keys'})")
+                      f"({count} {unit}{'' if count == 1 else 's'})")
         else:
             for row in report["checks"]:
                 print(f"{'PASS' if row['passed'] else 'FAIL'}  {row['name']}")
