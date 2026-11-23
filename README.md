@@ -44,7 +44,17 @@ sqlwhy diff old new --table old=examples/orders.csv --table new=examples/payment
 
 Order 41 gains a row and order 42 disappears. Use `--db warehouse.duckdb` for database relations, `--limit 0` for totals, and `--json` for CI. Exit 1 means at least one key changed multiplicity. Exit 0 means every key had the same number of rows, and exit 2 means the comparison could not run. NULL forms one key. Text keys are compared by exact UTF-8 bytes and both key columns must have the same supported DuckDB type. Use audit or trace on a supported source query when you need to locate the responsible clause.
 
-### Check a required count
+### Compare values within each key
+
+To compare a metric even when row counts agree, add `--value` to the diff:
+
+```sh
+sqlwhy diff previous_discounts current_discounts --db warehouse.duckdb --key code --value discount_amount
+```
+
+Within each key, sqlwhy compares how often each value occurs on each side, including NULLs and duplicates. `modified_keys` counts keys whose number of rows stayed the same while values changed. Each displayed example includes up to one value that became less frequent and one that became more frequent. In the Shopify study fixture, rolling up shipping lines before the join changed the discount for `save5` from 10 to 5 with one output row on both sides. [Executable comparison](tests/test_diff_values.py)
+
+### Audit a source query
 
 ```sh
 sqlwhy audit report.sql --db warehouse.duckdb --key o.id --expect-rows 1

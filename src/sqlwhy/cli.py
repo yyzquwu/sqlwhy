@@ -56,6 +56,7 @@ def _parser(command):
         _inputs(parser)
         parser.add_argument("--key", required=True, help="baseline key column (same name on both sides by default)")
         parser.add_argument("--after-key", help="candidate key column if renamed")
+        parser.add_argument("--value", help="compare values in this column within each key, including duplicates")
         parser.add_argument("--limit", type=_nonnegative_int, default=5, help="maximum examples (default: 5)")
         parser.add_argument("--json", action="store_true", help="print the result as JSON")
         return parser
@@ -175,6 +176,12 @@ def _show_diff(result):
           f"Increased {result['increased_keys']}  |  Decreased {result['decreased_keys']}")
     for ex in result["examples"]:
         print(f"  {_literal(ex['key'])}  [{ex['before_rows']} -> {ex['after_rows']}]")
+        for side in ("decreased_value", "increased_value"):
+            if v := ex.get(side):
+                print(f"    {result['value_column']} = {_literal(v['value'])}  "
+                      f"[{v['before_rows']} -> {v['after_rows']}]")
+    if "modified_keys" in result:
+        print(f"Equal-count keys with changed values: {result['modified_keys']}")
 
 
 def main(argv=None):
@@ -206,7 +213,8 @@ def main(argv=None):
         with con:
             con.execute("BEGIN TRANSACTION READ ONLY")
             if command == "diff":
-                result = diff_rows(con, args.before, args.after, args.key, after_key=args.after_key, limit=args.limit)
+                result = diff_rows(con, args.before, args.after, args.key, after_key=args.after_key,
+                                   value=args.value, limit=args.limit)
             elif audit or cte_demo:
                 result = audit_rows(con, sql, "o.id" if cte_demo else args.key,
                                     1 if args.expect_rows is None else args.expect_rows,
