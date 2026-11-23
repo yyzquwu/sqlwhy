@@ -1,5 +1,6 @@
 from pathlib import Path
 
+import duckdb
 import pytest
 
 from sqlwhy.cli import main
@@ -11,15 +12,16 @@ DIFF = "sqlwhy diff BEFORE AFTER --db ... --key ..."
 @pytest.fixture
 def inputs(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
-    Path("orders.csv").write_text("id\n42\n", encoding="utf-8")
+    with duckdb.connect() as con:
+        con.execute("COPY (SELECT 42 AS id, {'city': 'LA'} AS shipping) TO 'orders.parquet'")
     Path("ok.sql").write_text("SELECT id FROM orders", encoding="utf-8")
     Path("sqlwhy.toml").write_text(
-        'version = 1\n[tables]\norders = "orders.csv"\n'
+        'version = 1\n[tables]\norders = "orders.parquet"\n'
         '[[checks]]\nname = "First audit"\ntype = "audit"\nsql = "ok.sql"\nkey = "id"\nexpect_rows = 1\n'
         '[[checks]]\nname = "Report grain"\ntype = "audit"\nsql = "report.sql"\nkey = "id"\nexpect_rows = 1\n',
         encoding="utf-8",
     )
-    return ["--table", "orders=orders.csv", "--json"]
+    return ["--table", "orders=orders.parquet", "--json"]
 
 
 def cli_error(args, capsys):
@@ -115,10 +117,14 @@ def test_check_runtime_error_keeps_context_without_fallback(inputs, capsys):
 
 @pytest.mark.parametrize("mode", ["trace", "audit", "check"])
 @pytest.mark.parametrize(("sql", "diagnostic", "suggest_diff"), [
-    ("SELECT ord.id FROM orders o", "Qualifier 'ord' does not match a source alias. Source aliases: o.", False),
+    ("SELECT ord.id FROM orders o", 'Referenced table "ord" not found', False),
     ("(SELECT o.id FROM orders o)", "Expected a plain SELECT statement", True),
+    ("SELECT o.id, shipping.city FROM orders o", 'dotted reference "shipping"."city"', True),
+    ("WITH src AS (SELECT id, shipping AS addr FROM orders) SELECT id FROM src WHERE addr.city = 'LA'",
+     'Final SELECT: sqlwhy cannot trace the dotted reference "addr"."city"', True),
+    ("SELECT id, shipping.zip FROM orders", 'zip', False),
 ])
-def test_unknown_qualifier_and_wrapped_select(mode, sql, diagnostic, suggest_diff, inputs, capsys):
+def test_qualifiers_and_wrapped_select(mode, sql, diagnostic, suggest_diff, inputs, capsys):
     Path("report.sql").write_text(sql, encoding="utf-8")
     args = {
         "trace": ["report.sql", "--trace", "id=42", *inputs],

@@ -28,9 +28,10 @@ def _label(name):
     return "Final SELECT" if name is None else f"CTE {name!r}"
 
 
-def _step(sql, start, end, prefix_end, name):
+def _step(sql, start, end, prefix_end, name, connection):
     try:
-        query = parse_query(sql[start:end])
+        prefix = sql[:prefix_end] + "\n" if prefix_end else ""
+        query = parse_query(sql[start:end], connection=connection, prefix=prefix)
     except ValueError as err:
         error_type = UnsupportedSQLShape if isinstance(err, UnsupportedSQLShape) else ValueError
         raise error_type(f"{_label(name)}: {err}") from err
@@ -52,11 +53,11 @@ def _body_end(tokens, start, name):
     raise ValueError(f"{_label(name)}: missing closing parenthesis")
 
 
-def _plan(sql, spans, names):
+def _plan(sql, spans, names, connection):
     steps = []
     previous = None
     for span in spans:
-        step = _step(sql, *span)
+        step = _step(sql, *span, connection)
         q = step.query
         label = _label(step.name)
         base = q.base_name.translate(_FOLD)
@@ -72,7 +73,7 @@ def _plan(sql, spans, names):
     return tuple(steps)
 
 
-def parse_chain(sql: str) -> tuple[ChainStep, ...] | None:
+def parse_chain(sql: str, *, connection=None) -> tuple[ChainStep, ...] | None:
     """Validate every SELECT and return ordered CTE steps followed by the final SELECT."""
     try:
         tokens = _DUCKDB.tokenize(sql)
@@ -89,9 +90,9 @@ def parse_chain(sql: str) -> tuple[ChainStep, ...] | None:
         spans.extend(_spans(sql, tokens, names))
     except ValueError:
         # A malformed or unsupported header must not mask an earlier invalid step.
-        _plan(sql, spans, names)
+        _plan(sql, spans, names, connection)
         raise
-    return _plan(sql, spans, names)
+    return _plan(sql, spans, names, connection)
 
 
 def _spans(sql, tokens, names):

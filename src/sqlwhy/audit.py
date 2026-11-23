@@ -62,7 +62,7 @@ def audit_rows(connection, sql: str, key: str, expected_rows: int, limit: int = 
         if isinstance(value, bool) or not isinstance(value, int) or value < 0:
             raise ValueError(f"{label} must be a nonnegative integer.")
 
-    steps = parse_chain(sql)
+    steps = parse_chain(sql, connection=connection)
     if steps is not None:
         chain = _bind_chain(connection, steps, key)
         base, key_col = chain.steps[0]
@@ -72,7 +72,7 @@ def audit_rows(connection, sql: str, key: str, expected_rows: int, limit: int = 
         statement = _audit_sql(base.query, key_col, chain.index, chain.width, key_type.id == "varchar",
                                steps[-1].statement_sql, chain.relations)
     else:
-        plan = parse_query(sql)
+        plan = parse_query(sql, connection=connection)
         key_col = _key_column(plan, key)
         key_name, key_type = connection.execute(f"SELECT {key_col} FROM {plan.base_sql} LIMIT 0").description[0][:2]
         source_names = _columns(connection, plan.base_sql)

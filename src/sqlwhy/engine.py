@@ -332,11 +332,11 @@ def trace_row(connection, sql: str, key: str, value) -> dict:
 
     Use a DuckDB transaction if concurrent writes could change data between CTE steps.
     """
-    steps = parse_chain(sql)
+    steps = parse_chain(sql, connection=connection)
     if steps is not None:
         chain = _bind_chain(connection, steps, key)
         return _trace_chain(connection, chain, key, value, _prepare_chain_trace(connection, chain))
-    plan = parse_query(sql)
+    plan = parse_query(sql, connection=connection)
     key_col = _key_column(plan, key)
     connection.execute(f"EXPLAIN {plan.sql}")
     return _trace(connection, plan, key, key_col, value, _prepare_trace(connection, plan, key_col))

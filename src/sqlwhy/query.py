@@ -4,6 +4,7 @@ from collections import Counter
 from dataclasses import dataclass
 from typing import Literal
 
+import duckdb
 from sqlglot import Dialect, exp
 from sqlglot.errors import ParseError, TokenError
 from sqlglot.tokens import TokenType as TT
@@ -71,19 +72,14 @@ def _table(node, clause, tokens):
     return node
 
 
-def _column(node, names, star=False):
-    if not (isinstance(node, exp.Column) and isinstance(node.this, exp.Star if star else exp.Identifier)):
-        return False
-    if _extra(node, {"this", "table"}):
-        return False
-    if node.table and node.table.translate(_FOLD) not in names:
-        raise ValueError(f"Qualifier {node.table!r} does not match a source alias. Source aliases: {', '.join(sorted(names))}.")
-    return True
+def _column(node, star=False):
+    return (isinstance(node, exp.Column) and isinstance(node.this, exp.Star if star else exp.Identifier)
+            and not _extra(node, {"this", "table"}))
 
 
-def _scalar(expr, clause, names, sql):
+def _scalar(expr, clause, sql):
     for node in expr.walk():
-        if isinstance(node, exp.Column) and not _column(node, names):
+        if isinstance(node, exp.Column) and not _column(node):
             raise UnsupportedSQLShape(f"{clause} column references may use one source alias as qualifier")
         if isinstance(node, exp.DataType) and (node.this not in _CAST_TYPES or node.expressions):
             raise UnsupportedSQLShape(f"{clause} only supports simple built-in cast types")
@@ -108,18 +104,18 @@ def _unparen(node):
     return node
 
 
-def _check_on(node, names):
+def _check_on(node):
     node = _unparen(node)
     if isinstance(node, exp.And):
-        _check_on(node.this, names)
-        _check_on(node.expression, names)
+        _check_on(node.this)
+        _check_on(node.expression)
     elif not isinstance(node, exp.EQ) or not all(
-        _column(_unparen(op), names) for op in (node.this, node.expression)
+        _column(_unparen(op)) for op in (node.this, node.expression)
     ):
         raise UnsupportedSQLShape("JOIN ON must compare two columns for equality, with optional AND conditions")
 
 
-def parse_query(sql: str) -> Query:
+def parse_query(sql: str, *, connection=None, prefix="") -> Query:
     """Extract one SELECT while preserving the original ON and WHERE semantics."""
     try:
         tokens = _DUCKDB.tokenize(sql)
@@ -174,7 +170,7 @@ def parse_query(sql: str) -> Query:
         names.add(right.alias_or_name.translate(_FOLD))
         if len(names) != 2:
             raise ValueError("JOIN sources must have different aliases")
-        _check_on(join.args.get("on"), names)
+        _check_on(join.args.get("on"))
 
     if not stmt.expressions:
         raise ValueError("SELECT must have a projection")
@@ -188,19 +184,30 @@ def parse_query(sql: str) -> Query:
         if proj is expr and isinstance(star, exp.Star):
             if _extra(star, set()):
                 raise UnsupportedSQLShape("SELECT wildcard modifiers are unsupported")
-            if expr is not star and not _column(expr, names, star=True):
+            if expr is not star and not _column(expr, star=True):
                 raise UnsupportedSQLShape("SELECT wildcards may use one source alias as qualifier")
         else:
-            _scalar(expr, "SELECT", names, sql)
+            _scalar(expr, "SELECT", sql)
 
     where = stmt.args.get("where")
     where_columns = ()
     if where:
-        _scalar(where.this, "WHERE", names, sql)
+        _scalar(where.this, "WHERE", sql)
         cols = list(where.find_all(exp.Column, bfs=False))
         if any(not c.table and c.name.translate(_FOLD) in aliases for c in cols):
             raise UnsupportedSQLShape("WHERE may not reference an unqualified SELECT alias")
         where_columns = tuple(dict.fromkeys(map(_render, cols)))
+
+    # A two-part name can bind to a STRUCT field or a table alias. Ask DuckDB
+    # only after validating the SELECT, and use DESCRIBE so no rows are read.
+    for col in stmt.find_all(exp.Column):
+        if col.table and col.table.translate(_FOLD) not in names:
+            if connection is not None:
+                try:
+                    connection.execute(f"DESCRIBE {prefix}{sql[:tokens[-1].end + 1]}")
+                except duckdb.Error as err:
+                    raise ValueError(str(err)) from err
+            raise UnsupportedSQLShape(f"sqlwhy cannot trace the dotted reference {_render(col)} in this query.")
 
     # SQLGlot can normalize DuckDB syntax with different semantics, such as IN lists.
     last_table = right or base
