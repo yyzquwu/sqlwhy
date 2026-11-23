@@ -59,6 +59,17 @@ def test_rejects_late_unsupported_clauses_before_database_access(run):
         run(object(), sql, "id", 1)
 
 
+@pytest.mark.parametrize("header", ["later AS MATERIALIZED", "later(id) AS"])
+@pytest.mark.parametrize("run", [trace_row, audit_rows])
+def test_earlier_body_precedes_unsupported_later_header(header, run):
+    sql = f"WITH early AS (SELECT DISTINCT id FROM orders), {header} (SELECT id FROM early) SELECT * FROM later"
+    with duckdb.connect() as con:
+        con.execute("CREATE TABLE orders AS SELECT 1 AS id")
+        assert con.execute(sql).fetchall() == [(1,)]
+        with pytest.raises(ValueError, match="CTE 'early': SELECT DISTINCT"):
+            run(con, sql, "id", 1)
+
+
 @pytest.mark.parametrize(("sql", "reason"), [
     ("WITH RECURSIVE loop AS (SELECT * FROM t) SELECT * FROM loop", "loop.*RECURSIVE"),
     ("WITH a AS (SELECT * FROM t), \"A\" AS (SELECT * FROM a) SELECT * FROM a", "'A'.*duplicate"),

@@ -84,6 +84,16 @@ def parse_chain(sql: str) -> tuple[ChainStep, ...] | None:
         raise ValueError(f"{_label(tokens[2].text)}: WITH RECURSIVE is unsupported")
 
     spans, names = [], set()
+    try:
+        spans.extend(_spans(sql, tokens, names))
+    except ValueError:
+        # A malformed or unsupported header must not mask an earlier invalid step.
+        _plan(sql, spans, names)
+        raise
+    return _plan(sql, spans, names)
+
+
+def _spans(sql, tokens, names):
     i, prefix_end = 1, 0
     while i < len(tokens):
         token = tokens[i]
@@ -101,13 +111,13 @@ def parse_chain(sql: str) -> tuple[ChainStep, ...] | None:
         if [t.token_type for t in as_body] != [TT.ALIAS, TT.L_PAREN]:
             raise ValueError(f"{label}: expected AS (SELECT ...). CTE column lists and modifiers are unsupported.")
         end = _body_end(tokens, i + 3, name)
-        spans.append((as_body[-1].end + 1, tokens[end].start, prefix_end, name))
+        yield as_body[-1].end + 1, tokens[end].start, prefix_end, name
         i = end + 1
         if i == len(tokens):
             raise ValueError(f"{label}: expected a final SELECT")
         prefix_end = tokens[i].start
         if tokens[i].token_type != TT.COMMA:
-            spans.append((prefix_end, len(sql), prefix_end, None))
-            return _plan(sql, spans, names)
+            yield prefix_end, len(sql), prefix_end, None
+            return
         i += 1
     raise ValueError("WITH requires a CTE before the final SELECT")
