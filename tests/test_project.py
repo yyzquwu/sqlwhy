@@ -1,4 +1,5 @@
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -52,6 +53,12 @@ value = "amt"
     args = [sys.executable, '-m', 'sqlwhy', 'check', str(cfg), '--json']
     p = subprocess.run(args, capture_output=True, text=True)
     assert p.returncode == 1 and json.loads(p.stdout)['failed_checks'] == 2
+    summary = subprocess.run([*args[:-1], '--markdown'], capture_output=True, text=True, encoding='utf-8',
+                             env={**os.environ, 'PYTHONIOENCODING': 'utf-8'})
+    assert summary.returncode == 1 and not summary.stderr
+    assert '**FAIL** <code>metric</code> (1 changed keys)' in summary.stdout
+    assert '### sqlwhy' in summary.stdout and '2 checks, 2 failed' in summary.stdout
+    assert 'decreased_value' not in summary.stdout
     cfg.write_text(cfg.read_text().replace('value = "amt"', 'value = "actuall"'))
     p = subprocess.run(args, capture_output=True, text=True)
     assert p.returncode == 2 and not p.stdout and "Check 'metric': Unknown value" in p.stderr

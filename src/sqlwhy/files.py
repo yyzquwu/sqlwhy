@@ -13,6 +13,9 @@ SAFE_CONFIG = {
 }
 
 
+TABLE_NAME = re.compile(r"[A-Za-z_][A-Za-z_0-9]*")
+
+
 def open_db(path):
     if not path.is_file():
         raise ValueError(f"database file does not exist or is not a file: {path}")
@@ -24,7 +27,7 @@ def open_tables(specs):
     tables = {}
     for spec in specs:
         name, sep, filename = spec.partition("=")
-        if not sep or not re.fullmatch(r"[A-Za-z_][A-Za-z_0-9]*", name) or not filename:
+        if not sep or not TABLE_NAME.fullmatch(name) or not filename:
             raise ValueError("--table expects TABLE_NAME=path/to/file.csv or .parquet")
         if name.lower() in tables:
             raise ValueError(f"Duplicate table name: {name}")

@@ -1,6 +1,6 @@
 # sqlwhy
 
-**Which step of your SQL report lost an order?** Give sqlwhy the query, its source key, and the number of rows you expect per key. It finds missing or duplicated keys and names the CTE and clause where their counts changed.
+**Which step of your SQL report lost an order?** sqlwhy finds missing or duplicated keys and shows the CTE and clause where their counts changed. You can also compare two saved report outputs by key, check a metric that changed despite equal row counts, and keep the checks in CI.
 
 ```sh
 sqlwhy demo cte-audit
@@ -19,7 +19,17 @@ This built-in example takes no files and intentionally exits **1**. Add `--json`
 
 ![Terminal demo of sqlwhy finding a duplicated order and a missing order, then passing the repaired report](docs/audit.gif)
 
-## Try it
+## Install and try it
+
+With access to this repository, install the tagged version in a Python 3.11+ environment using your existing GitHub credentials:
+
+```sh
+python -m pip install "git+https://github.com/yyzquwu/sqlwhy.git@v1.0.0"
+sqlwhy --version
+sqlwhy demo cte-audit
+```
+
+The [private release](https://github.com/yyzquwu/sqlwhy/releases/tag/v1.0.0) also provides a wheel, source distribution and checksums. For a passing and a failing example on the same data, use the checkout walkthrough below.
 
 From a checkout, using Python 3.11 or later in a virtual environment:
 
@@ -72,10 +82,13 @@ Put recurring audits and diffs in a versioned TOML file. Choose a DuckDB `databa
 
 ```yaml
 - name: Check reports
-  run: sqlwhy check examples/audit/sqlwhy.toml
+  shell: bash
+  run: sqlwhy check examples/audit/sqlwhy.toml --markdown >> "$GITHUB_STEP_SUMMARY"
 ```
 
 For measured timings, fixture size, hardware, and a command to repeat the run, see the [audit benchmark](benchmarks/README.md).
+
+See the [1.x CLI, suite format and Python API contracts](docs/contracts.md) for exit codes, JSON fields, comparison semantics and the compatibility policy.
 
 ## Trace your own query
 

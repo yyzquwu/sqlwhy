@@ -1,7 +1,9 @@
 ﻿import argparse
+import html
 import json
 import re
 import sys
+from importlib.metadata import version
 from pathlib import Path
 
 import duckdb
@@ -54,7 +56,9 @@ def _parser(command):
         parser = argparse.ArgumentParser(prog="sqlwhy check", description="Run the audit and diff checks in a TOML suite.")
         parser.add_argument("project", type=Path, help="path to the project TOML")
         parser.add_argument("--limit", type=_nonnegative_int, default=5, help="maximum examples per check")
-        parser.add_argument("--json", action="store_true", help="print the versioned suite report")
+        output = parser.add_mutually_exclusive_group()
+        output.add_argument("--json", action="store_true", help="print the versioned suite report")
+        output.add_argument("--markdown", action="store_true", help="print a CI job summary with counts only")
         return parser
     if command == "diff":
         parser = argparse.ArgumentParser(prog="sqlwhy diff", description="Compare two outputs by key multiplicity.")
@@ -86,6 +90,8 @@ def _parser(command):
         epilog=None if audit else ("" if demo else examples) + "Built-in demos\n" + names,
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
+    if command is None:
+        parser.add_argument("--version", action="version", version=f"sqlwhy {version('sqlwhy')}")
     if demo:
         parser.add_argument("name", nargs="?", choices=DEMOS, default="left-join-null")
     else:
@@ -203,6 +209,14 @@ def main(argv=None):
             parser.error(str(err))
         if args.json:
             print(json.dumps(report, indent=2))
+        elif args.markdown:
+            print(f"### sqlwhy · {len(report['checks'])} checks, {report['failed_checks']} failed\n")
+            for row in report["checks"]:
+                audit = row["type"] == "audit"
+                count = row["result"]["violation_count" if audit else "changed_keys"]
+                name = html.escape(" ".join(row["name"].splitlines()))
+                print(f"- **{'PASS' if row['passed'] else 'FAIL'}** <code>{name}</code> "
+                      f"({count} {'violations' if audit else 'changed keys'})")
         else:
             for row in report["checks"]:
                 print(f"{'PASS' if row['passed'] else 'FAIL'}  {row['name']}")

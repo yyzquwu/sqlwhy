@@ -1,0 +1,8 @@
+include README.md LICENSE
+graft docs
+graft examples
+graft research
+graft benchmarks
+graft tests
+global-exclude *.py[cod]
+prune .pytest_cache

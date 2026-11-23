@@ -6,7 +6,7 @@ import duckdb
 
 from .audit import audit_rows
 from .diff import diff_rows
-from .files import open_db, open_tables
+from .files import TABLE_NAME, open_db, open_tables
 
 
 def _fields(data, required, optional=()):
@@ -79,6 +79,8 @@ def check_project(path, *, limit=5) -> dict:
         tables = config["tables"]
         if not isinstance(tables, dict) or not tables:
             raise ValueError("[tables] must map table names to local CSV or Parquet files.")
+        if any(not TABLE_NAME.fullmatch(k) for k in tables):
+            raise ValueError("[tables] names must be simple SQL identifiers.")
         con = open_tables([f"{k}={root / _text(v, k)}" for k, v in tables.items()])
     records = []
     with con:
