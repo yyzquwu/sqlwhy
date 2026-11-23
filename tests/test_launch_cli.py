@@ -111,3 +111,21 @@ def test_check_runtime_error_keeps_context_without_fallback(inputs, capsys):
     err = cli_error(["check", "sqlwhy.toml", "--json"], capsys)
     assert "Check 'Report grain': Catalog Error: Table with name absent does not exist" in err
     assert DIFF not in err and ISSUE not in err
+
+
+@pytest.mark.parametrize("mode", ["trace", "audit", "check"])
+@pytest.mark.parametrize(("sql", "diagnostic", "suggest_diff"), [
+    ("SELECT ord.id FROM orders o", "Qualifier 'ord' does not match a source alias. Source aliases: o.", False),
+    ("(SELECT o.id FROM orders o)", "Expected a plain SELECT statement", True),
+])
+def test_unknown_qualifier_and_wrapped_select(mode, sql, diagnostic, suggest_diff, inputs, capsys):
+    Path("report.sql").write_text(sql, encoding="utf-8")
+    args = {
+        "trace": ["report.sql", "--trace", "id=42", *inputs],
+        "audit": ["audit", "report.sql", "--key", "id", "--expect-rows", "1", *inputs],
+        "check": ["check", "sqlwhy.toml", "--json"],
+    }
+    err = cli_error(args[mode], capsys)
+    assert diagnostic in err
+    assert (DIFF in err) == suggest_diff
+    assert (ISSUE in err) == suggest_diff

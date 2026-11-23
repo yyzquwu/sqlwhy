@@ -72,12 +72,13 @@ def _table(node, clause, tokens):
 
 
 def _column(node, names, star=False):
-    return (
-        isinstance(node, exp.Column)
-        and isinstance(node.this, exp.Star if star else exp.Identifier)
-        and not _extra(node, {"this", "table"})
-        and (not node.table or node.table.translate(_FOLD) in names)
-    )
+    if not (isinstance(node, exp.Column) and isinstance(node.this, exp.Star if star else exp.Identifier)):
+        return False
+    if _extra(node, {"this", "table"}):
+        return False
+    if node.table and node.table.translate(_FOLD) not in names:
+        raise ValueError(f"Qualifier {node.table!r} does not match a source alias. Source aliases: {', '.join(sorted(names))}.")
+    return True
 
 
 def _scalar(expr, clause, names, sql):
@@ -137,7 +138,8 @@ def parse_query(sql: str) -> Query:
     if isinstance(stmt, exp.Select) and stmt.args.get("with_"):
         raise UnsupportedSQLShape("SELECT WITH clauses are unsupported")
     if not isinstance(stmt, exp.Select):
-        raise ValueError("Expected a plain SELECT statement")
+        error_type = UnsupportedSQLShape if isinstance(stmt, (exp.Query, exp.Values)) else ValueError
+        raise error_type("Expected a plain SELECT statement")
     if tokens[0].token_type != TT.SELECT:
         raise UnsupportedSQLShape("Expected a plain SELECT statement")
     extra = _extra(stmt, {"from_", "joins", "expressions", "where"})

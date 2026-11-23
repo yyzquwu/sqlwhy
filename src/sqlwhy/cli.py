@@ -205,7 +205,7 @@ def _show_diff(result):
 def _cli_error(parser, err):
     msg = str(err)
     if isinstance(err, UnsupportedSQLShape):
-        msg += ("\n\nSave the query outputs as tables or views in the same DuckDB database and compare them.\n"
+        msg += ("\n\nIf your query runs in DuckDB, save the two outputs as tables or views and compare them.\n"
                 "  sqlwhy diff BEFORE AFTER --db ... --key ...\n"
                 "Report an unsupported SQL shape at "
                 "https://github.com/yyzquwu/sqlwhy/issues/new?template=unsupported-sql.yml")
