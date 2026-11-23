@@ -39,8 +39,8 @@ def test_fixed_report_and_direct_trace():
 def test_trace_explains_renamed_source_key():
     p = cli("cte_broken.sql", *TABLES, "--trace", "order_id=41", "--json")
     assert p.returncode == 2 and not p.stdout
-    assert "CTE 'orders_with_payments': Use a key from" in p.stderr
-    assert 'before it is renamed. Source columns include "id"' in p.stderr
+    assert "CTE 'orders_with_payments': Unknown source key 'order_id'" in p.stderr
+    assert 'Use its source name before any rename. Source columns include "id"' in p.stderr
 
 
 def test_demo_limit_only_restricts_examples():

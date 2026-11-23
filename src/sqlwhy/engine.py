@@ -38,7 +38,8 @@ def _key_column(plan: Query, key: str, source_names=None) -> str:
     col = _unquote(col)
     if source_names is not None and col.translate(_FOLD) not in {n.translate(_FOLD) for n in source_names}:
         available = ", ".join(_quote(n) for n in source_names[:8])
-        raise ValueError(f"Use a key from {plan.base_sql} before it is renamed. Source columns include {available}.")
+        raise ValueError(f"Unknown source key {col!r} on {plan.base_sql}. Use its source name before any rename. "
+                         f"Source columns include {available}.")
     return f"{_quote(plan.base_alias)}.{_quote(col)}"
 
 
@@ -293,7 +294,10 @@ def _bind_chain(connection, steps, key):
             if any(report[i][1] != str(key_type) for i in indices):
                 raise ValueError("requires the projected source key to keep its original type.")
         except ValueError as err:
-            raise ValueError(f"{_label(step.name)}: {err}") from err
+            message = str(err)
+            if message.startswith("Audit "):
+                message = "This step " + message.removeprefix("Audit ")
+            raise ValueError(f"{_label(step.name)}: {message}") from err
         except (duckdb.BinderException, duckdb.CatalogException, duckdb.ParserException) as err:
             raise type(err)(f"{_label(step.name)}: {err}") from err
         bound.append((step, key_col))

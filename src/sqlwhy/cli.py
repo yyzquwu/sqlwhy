@@ -73,7 +73,8 @@ def _parser(command):
                                 help="source key and value (NULL for SQL NULL, double quotes for text)")
     if audit or demo:
         parser.add_argument("--limit", metavar="N", type=_nonnegative_int,
-                            help="maximum audit examples (default: 5, cte-audit only for demos)")
+                            help="maximum examples for cte-audit (default: 5)" if demo else
+                                 "maximum audit examples (default: 5)")
     parser.add_argument("--json", action="store_true", help="print the result as JSON")
     if not audit:
         parser.add_argument("--expect", choices=STATUSES, help="exit 1 when the trace status differs")
