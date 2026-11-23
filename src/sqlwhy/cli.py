@@ -52,8 +52,9 @@ def _parser(command):
     )
     parser = argparse.ArgumentParser(
         prog=f"sqlwhy {command}" if command else "sqlwhy",
-        description=("Check the report row count for every source key."
-                     if audit else "Trace a source row through the joins and WHERE clause of a SQL query."),
+        description=("Run a built-in row trace or CTE audit." if demo else
+                     "Check the report row count for every source key." if audit else
+                     "Trace a source row through the joins and WHERE clause of a SQL query."),
         epilog=None if audit else ("" if demo else examples) + "Built-in demos\n" + names,
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
@@ -67,17 +68,18 @@ def _parser(command):
                             help="local CSV or Parquet file to load as NAME (repeatable)")
         if audit:
             parser.add_argument("--key", required=True, metavar="COLUMN", help="key column on the leftmost table")
-            parser.add_argument("--limit", metavar="N", type=_nonnegative_int, default=5,
-                                help="maximum number of violation examples (default: 5)")
         else:
             parser.add_argument("--trace", required=True, metavar="KEY=VALUE", type=_trace_arg,
                                 help="source key and value (NULL for SQL NULL, double quotes for text)")
+    if audit or demo:
+        parser.add_argument("--limit", metavar="N", type=_nonnegative_int,
+                            help="maximum audit examples (default: 5, cte-audit only for demos)")
     parser.add_argument("--json", action="store_true", help="print the result as JSON")
     if not audit:
         parser.add_argument("--expect", choices=STATUSES, help="exit 1 when the trace status differs")
     parser.add_argument("--expect-rows", metavar="N", type=_nonnegative_int, required=audit,
                         help="exit 1 when any source key has a different report row count"
-                        if audit else "exit 1 when the trace output row count differs")
+                        if audit else "expected report rows per source key")
     return parser
 
 
@@ -162,6 +164,8 @@ def main(argv=None):
     args = parser.parse_args(argv[1:] if command else argv)
     flat = demo and args.name == "flat-counts"
     cte_demo = demo and args.name == "cte-audit"
+    if demo and args.limit is not None and not cte_demo:
+        parser.error("--limit applies to the cte-audit demo.")
     if cte_demo and args.expect:
         parser.error("cte-audit checks all keys. Use --expect-rows for a per-key count.")
     if flat and (args.expect is not None or args.expect_rows is not None):
@@ -178,7 +182,7 @@ def main(argv=None):
             if audit or cte_demo:
                 result = audit_rows(con, sql, "o.id" if cte_demo else args.key,
                                     1 if args.expect_rows is None else args.expect_rows,
-                                    limit=5 if cte_demo else args.limit)
+                                    limit=5 if args.limit is None else args.limit)
             elif flat:
                 result = trace_flat_counts(con)
             else:

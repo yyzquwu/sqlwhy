@@ -47,13 +47,13 @@ def test_compiled_stg_orders_audit(tmp_path):
     "case, key, projection, rows, diagnostic",
     [
         ("a1", "invoice_id", "source_relation, total_current_payment", [("alpha", 60), ("beta", 40)],
-         r"CTE 'invoice_link'.*one JOIN"),
+         r"CTE 'invoice_linked': FROM must reference preceding CTE 'invoices'"),
         ("a2", "bill_payment_id", "transaction_id, transaction_type", [(2, "credit"), (2, "debit")],
-         r"CTE 'bill_payment_join'.*window functions"),
+         r"CTE 'bill_payment_lines': FROM must reference preceding CTE 'bill_payments'"),
         ("a3", "checkout_id", "code, total_abandoned_checkout_discount_amount", [("save5", 10)],
          r"CTE 'abandoned_checkout'.*WHERE.*COALESCE"),
         ("a5", "ticket_id", "ticket_id, first_resolution_calendar_minutes", [(1, None), (2, 15)],
-         r"CTE 'solved_times'.*GROUP"),
+         r"CTE 'ticket': FROM must reference preceding CTE 'historical_solved_status'"),
     ],
     ids=["a1-quickbooks-invoice", "a2-quickbooks-bill-payment", "a3-shopify", "a5-zendesk"],
 )

@@ -7,7 +7,7 @@ from datetime import date, time
 
 import duckdb
 
-from .chain import ChainStep, parse_chain
+from .chain import ChainStep, _label, parse_chain
 from .query import _FOLD, Query, _projected_keys, needs_native_guard, parse_query
 
 _ID = r'(?:"(?:[^"]|"")+"|[^\W\d][\w$]*)'
@@ -24,7 +24,7 @@ def _unquote(ident: str) -> str:
     return ident[1:-1].replace('""', '"') if ident.startswith('"') else ident
 
 
-def _key_column(plan: Query, key: str) -> str:
+def _key_column(plan: Query, key: str, source_names=None) -> str:
     match = _KEY.fullmatch(key.strip())
     if not match:
         raise ValueError("Use a source column name or a qualified source column as the key.")
@@ -35,7 +35,11 @@ def _key_column(plan: Query, key: str) -> str:
         related = {ident.translate(_FOLD) for ident in (plan.right_alias, plan.right_name) if ident}
         if name != alias and (name != plan.base_name.translate(_FOLD) or name in related):
             raise ValueError(f"The key must refer to the source table ({plan.base_alias}).")
-    return f"{_quote(plan.base_alias)}.{_quote(_unquote(col))}"
+    col = _unquote(col)
+    if source_names is not None and col.translate(_FOLD) not in {n.translate(_FOLD) for n in source_names}:
+        available = ", ".join(_quote(n) for n in source_names[:8])
+        raise ValueError(f"Use a key from {plan.base_sql} before it is renamed. Source columns include {available}.")
+    return f"{_quote(plan.base_alias)}.{_quote(col)}"
 
 
 def _cte_name(label: str, plan: Query, relations=()) -> str:
@@ -264,10 +268,6 @@ class _BoundChain:
     relations: tuple[str, ...]
 
 
-def _step_label(step):
-    return f"CTE {_quote(step.name)}" if step.name is not None else "Final SELECT"
-
-
 def _bind_chain(connection, steps, key):
     """Track an unambiguous direct key through DuckDB's bound output names."""
     bound = []
@@ -282,12 +282,10 @@ def _bind_chain(connection, steps, key):
                 key_names = tuple(source_names[i] for i in indices)
                 key_col = f"{_quote(plan.base_alias)}.{_quote(key_names[0])}"
             else:
-                key_col = _key_column(plan, key)
+                key_col = _key_column(plan, key, source_names)
                 key_name, key_type = connection.execute(
                     f"SELECT {key_col} FROM {plan.base_sql} LIMIT 0"
                 ).description[0][:2]
-                if key_name.translate(_FOLD) not in {name.translate(_FOLD) for name in source_names}:
-                    raise ValueError("requires a key column exposed by its source.")
                 key_names = (key_name,)
             report = connection.execute(f"DESCRIBE {step.statement_sql}").fetchall()
             indices = _projected_keys(plan, key_names, source_names, _columns(connection, plan.right_sql, prefix),
@@ -295,9 +293,9 @@ def _bind_chain(connection, steps, key):
             if any(report[i][1] != str(key_type) for i in indices):
                 raise ValueError("requires the projected source key to keep its original type.")
         except ValueError as err:
-            raise ValueError(f"{_step_label(step)} {str(err).removeprefix('Audit ')}") from err
+            raise ValueError(f"{_label(step.name)}: {err}") from err
         except (duckdb.BinderException, duckdb.CatalogException, duckdb.ParserException) as err:
-            raise type(err)(f"{_step_label(step)}: {err}") from err
+            raise type(err)(f"{_label(step.name)}: {err}") from err
         bound.append((step, key_col))
 
     relations = tuple(name for step in steps for name in (step.name, step.query.base_name, step.query.right_name)
@@ -315,10 +313,10 @@ def _trace_chain(connection, chain, key, value, prepared):
         try:
             run = _trace_stages(connection, step.query, key_col, value, evidence, step.prefix_sql, chain.relations)
         except duckdb.Error as err:
-            raise type(err)(f"{_step_label(step)}: {err}") from err
+            raise type(err)(f"{_label(step.name)}: {err}") from err
         if stages:
             if run[0]["after"] != stages[-1]["after"]:
-                raise ValueError(f"{_step_label(step)} source count could not be matched to the previous step.")
+                raise ValueError(f"{_label(step.name)}: source count could not be matched to the previous step.")
             run = run[1:]
         stages.extend({**stage, "cte": step.name} for stage in run)
     return _trace_result(key, value, stages)

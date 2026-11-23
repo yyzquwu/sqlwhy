@@ -24,7 +24,7 @@ def native_count(con, sql, column, value):
 def original(case, con):
     if case["source_form"] != "literal":
         if case.get("template_engine") == "dbt":
-            return "raw dbt template rejected (compiled SQL untested)"
+            return "raw dbt template rejected. [Compiled result](dbt/README.md#pre-fix-fivetran-models)"
         return f'{case["source_form"]} (no standalone query tested)'
     sql = case["source_sql"]
     column = case.get("original_output_key")

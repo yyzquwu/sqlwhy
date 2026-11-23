@@ -36,6 +36,22 @@ def test_fixed_report_and_direct_trace():
     assert trace.returncode == 0 and "[settled_orders] WHERE" in trace.stdout
 
 
+def test_trace_explains_renamed_source_key():
+    p = cli("cte_broken.sql", *TABLES, "--trace", "order_id=41", "--json")
+    assert p.returncode == 2 and not p.stdout
+    assert "CTE 'orders_with_payments': Use a key from" in p.stderr
+    assert 'before it is renamed. Source columns include "id"' in p.stderr
+
+
+def test_demo_limit_only_restricts_examples():
+    p = cli("demo", "cte-audit", "--limit", "0", "--json")
+    assert p.returncode == 1 and not p.stderr
+    result = json.loads(p.stdout)
+    assert result["violation_count"] == 2 and result["examples"] == []
+    invalid = cli("demo", "left-join-null", "--limit", "0")
+    assert invalid.returncode == 2 and "--limit applies to the cte-audit demo" in invalid.stderr
+
+
 @pytest.mark.parametrize("command", [["audit", "--key", "o.id", "--expect-rows", "1", "--limit", "0"],
                                       ["trace", "--trace", "o.id=41"]])
 def test_grain_change_names_the_step_even_without_examples(command, tmp_path):

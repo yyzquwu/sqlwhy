@@ -51,9 +51,11 @@ def _body_end(tokens, start, name):
     raise ValueError(f"{_label(name)}: missing closing parenthesis")
 
 
-def _check_sources(steps, names):
+def _plan(sql, spans, names):
+    steps = []
     previous = None
-    for step in steps:
+    for span in spans:
+        step = _step(sql, *span)
         q = step.query
         label = _label(step.name)
         base = q.base_name.translate(_FOLD)
@@ -65,6 +67,8 @@ def _check_sources(steps, names):
         if q.right_name and not q.right_qualified and q.right_name.translate(_FOLD) in names:
             raise ValueError(f"{label}: JOIN must use a physical lookup table, got CTE {q.right_name!r}")
         previous = step.name
+        steps.append(step)
+    return tuple(steps)
 
 
 def parse_chain(sql: str) -> tuple[ChainStep, ...] | None:
@@ -79,7 +83,7 @@ def parse_chain(sql: str) -> tuple[ChainStep, ...] | None:
             and tokens[2].token_type not in (TT.ALIAS, TT.L_PAREN)):
         raise ValueError(f"{_label(tokens[2].text)}: WITH RECURSIVE is unsupported")
 
-    steps, names = [], set()
+    spans, names = [], set()
     i, prefix_end = 1, 0
     while i < len(tokens):
         token = tokens[i]
@@ -97,14 +101,13 @@ def parse_chain(sql: str) -> tuple[ChainStep, ...] | None:
         if [t.token_type for t in as_body] != [TT.ALIAS, TT.L_PAREN]:
             raise ValueError(f"{label}: expected AS (SELECT ...). CTE column lists and modifiers are unsupported.")
         end = _body_end(tokens, i + 3, name)
-        steps.append(_step(sql, as_body[-1].end + 1, tokens[end].start, prefix_end, name))
+        spans.append((as_body[-1].end + 1, tokens[end].start, prefix_end, name))
         i = end + 1
         if i == len(tokens):
             raise ValueError(f"{label}: expected a final SELECT")
         prefix_end = tokens[i].start
         if tokens[i].token_type != TT.COMMA:
-            steps.append(_step(sql, prefix_end, len(sql), prefix_end, None))
-            _check_sources(steps, names)
-            return tuple(steps)
+            spans.append((prefix_end, len(sql), prefix_end, None))
+            return _plan(sql, spans, names)
         i += 1
     raise ValueError("WITH requires a CTE before the final SELECT")

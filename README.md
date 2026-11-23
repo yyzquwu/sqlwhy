@@ -105,6 +105,8 @@ Both audit and single-key trace support plain DuckDB SELECTs and linear, nonrecu
 
 Branches, grouping, window functions, DISTINCT, ORDER BY, LIMIT, and arbitrary SQL functions remain outside this release. If a named step drops the key or changes the grain through aggregation, the CLI identifies the unsupported step and exits **2**. Displayed stages follow logical SQL order. For compound conditions, the evidence describes the whole predicate.
 
+Use `WITH step AS (SELECT id AS order_id ...)` to rename a key inside the projection. CTE column lists such as `step(order_id) AS (...)` and materialization hints such as `AS MATERIALIZED` are unsupported. When a projection alias also names a source column, qualify that column in the filter, for example `SELECT id AS id FROM orders WHERE orders.id IS NOT NULL`.
+
 DuckDB can push a later filter ahead of an earlier cast. A complete report may therefore succeed even if evaluating that earlier CTE on its own raises a conversion error. When a selected example encounters this, sqlwhy reports the CTE and the error. Use `audit --limit 0` to get the native report totals without evaluating intermediate examples.
 
 The trace measures row survival before projection. It does not evaluate the SELECT list for runtime conversion errors. Use deterministic source relations: repeated reads of a volatile view can produce different rows. The command is intended for trusted analytical queries and local inputs. The Python API uses the connection supplied by its caller. Trace output may include source values, so review it before attaching it to an issue.
@@ -113,7 +115,7 @@ The trace measures row survival before projection. It does not evaluate the SELE
 
 MIT Open Learning fixed a blank discussion chart after finding that two tables used different names for the same platform. On synthetic tables, sqlwhy traced the original report query unchanged and showed the target disappearing at its inner join. A second published example hit a real limit. DuckDB executed the Stash issue reporter's query, but its `SELECT DISTINCT` prevents sqlwhy from tracing it.
 
-We selected ten public fixes involving missing or duplicated rows. Isolating the affected joins and filters made all ten pre-fix examples traceable. Two repaired examples still require SQL that v0.2 cannot trace. Each case records the source, the reductions made, and the observed counts. The study measures behavior on selected fixtures. It does not estimate coverage of arbitrary SQL. [Ten-case results and sources](research/results.md)
+We selected ten public fixes involving missing or duplicated rows. Isolating the affected joins and filters made all ten pre-fix examples traceable. Two repaired examples still use unsupported query forms. Each case records the source, the reductions made, and the observed counts. The study measures behavior on selected fixtures. It does not estimate coverage of arbitrary SQL. [Ten-case results and sources](research/results.md)
 
 Run `python research/replay.py` to reproduce the original table offline. For v0.4, we tested compiled DuckDB SQL separately, including a Jaffle Shop staging model and a deliberately faulty variant. [dbt compilation and compatibility results](research/dbt/README.md)
 

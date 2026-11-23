@@ -27,10 +27,10 @@ Each file is the full SQL emitted by `dbt compile` for DuckDB at the model's pre
 
 | Case | DuckDB observed on synthetic inputs | First sqlwhy v0.4 diagnostic and offending clause |
 | --- | --- | --- |
-| a1 QuickBooks invoice join | `alpha` payment lines totaling 30 report 60. `beta` lines totaling 20 report 40. | `CTE 'invoice_link': Only one JOIN is supported`. The second `LEFT JOIN` brings in `invoice_pay`. `final` also groups and joins three inputs. [Compiled SQL](compiled/a1.sql) |
-| a2 QuickBooks bill payment double entry | Payment 1 has no accounts-payable match and disappears. Payment 2 returns credit and debit rows. | `CTE 'bill_payment_join': SELECT does not support window functions`. The projection uses `ROW_NUMBER() OVER (…)`. `final` also uses `UNION ALL`. [Compiled SQL](compiled/a2.sql) |
+| a1 QuickBooks invoice join | `alpha` payment lines totaling 30 report 60. `beta` lines totaling 20 report 40. | `invoice_linked` reads a separate staging table instead of the preceding CTE `invoices`. Later, `invoice_link` uses two joins. `final` also groups and joins three inputs. [Compiled SQL](compiled/a1.sql) |
+| a2 QuickBooks bill payment double entry | Payment 1 has no accounts-payable match and disappears. Payment 2 returns credit and debit rows. | `bill_payment_lines` reads a separate staging table instead of `bill_payments`. Later, `bill_payment_join` projects `ROW_NUMBER() OVER (…)`. `final` also uses `UNION ALL`. [Compiled SQL](compiled/a2.sql) |
 | a3 Shopify checkout discounts | One `save5` discount worth 5 reports a total of 10 after two shipping-line matches. | `CTE 'abandoned_checkout': WHERE does not support the COALESCE function`. The predicate is `WHERE NOT COALESCE(is_deleted, FALSE)`. `abandoned_checkouts_aggregated` also uses two joins and `GROUP BY`. [Compiled SQL](compiled/a3.sql) |
-| a5 Zendesk calendar resolution | The closed-only ticket remains in the final report with `NULL` resolution minutes. The solved ticket reports 15 minutes. | `CTE 'solved_times': SELECT GROUP clauses are unsupported`. The aggregate uses `GROUP BY 1, 2`. The final select also joins three inputs. [Compiled SQL](compiled/a5.sql) |
+| a5 Zendesk calendar resolution | The closed-only ticket remains in the final report with `NULL` resolution minutes. The solved ticket reports 15 minutes. | `ticket` reads a separate staging table instead of `historical_solved_status`. Later, `solved_times` groups by two columns. The final select also joins three inputs. [Compiled SQL](compiled/a5.sql) |
 
 ## Recompile against the upstream revisions
 
@@ -44,7 +44,7 @@ $dbtPython = Join-Path $dbtVenv 'Scripts/python.exe'
 & $dbtPython research/dbt/check_compilation.py
 ```
 
-The script fetches each revision into a fresh temporary directory. It uses a `local_duckdb` profile with the `dev` target, `path: evidence.duckdb`, `schema: main`, and one thread. It runs `dbt seed --select raw_orders` for Jaffle Shop and `dbt deps` against the captured package locks for the Fivetran projects, then runs `dbt compile --select <model>` for each selected model. It checks the seed bytes and compares the generated SQL and package locks after normalizing platform line endings. The checked-in SQL retains the original Windows compile output, including whitespace.
+The script fetches each revision into a fresh temporary directory. It uses a `local_duckdb` profile with the `dev` target, `path: evidence.duckdb`, `schema: main`, and one thread. It runs `dbt seed --select raw_orders` for Jaffle Shop and `dbt deps` against the captured package locks for the Fivetran projects, then runs `dbt compile --select <model>` for each selected model. It checks the seed bytes and compares the generated SQL and package locks after normalizing platform line endings. SQL text and trailing spaces are compared after line-ending normalization.
 
 | Case | Pinned pre-fix model source | Dependency selection |
 | --- | --- | --- |

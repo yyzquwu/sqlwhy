@@ -1,8 +1,8 @@
 """Audit the report row count for every distinct left-source key in DuckDB."""
 
-from .chain import parse_chain
+from .chain import _label, parse_chain
 from .engine import (
-    _bind_chain, _columns, _cte_name, _key_column, _prepare_chain_trace, _prepare_trace, _step_label,
+    _bind_chain, _columns, _cte_name, _key_column, _prepare_chain_trace, _prepare_trace,
     _trace, _trace_chain,
 )
 from .query import _FOLD, parse_query, projected_key
@@ -68,7 +68,7 @@ def audit_rows(connection, sql: str, key: str, expected_rows: int, limit: int = 
         base, key_col = chain.steps[0]
         key_type = chain.key_type
         if key_type.id not in _KEY_TYPES:
-            raise ValueError(f"{_step_label(base)}: Audit does not support key type {key_type}.")
+            raise ValueError(f"{_label(base.name)}: Audit does not support key type {key_type}.")
         statement = _audit_sql(base.query, key_col, chain.index, chain.width, key_type.id == "varchar",
                                steps[-1].statement_sql, chain.relations)
     else:

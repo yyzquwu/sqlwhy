@@ -195,5 +195,5 @@ def test_stage_conversion_error_labels_the_cte(con):
     assert con.execute(sql).fetchall() == [(1,)]
     assert audit_rows(con, sql, "id", 1, limit=0)["violation_count"] == 1
     for run in (lambda: trace_row(con, sql, "id", 2), lambda: audit_rows(con, sql, "id", 1)):
-        with pytest.raises(duckdb.ConversionException, match='CTE "ordered"'):
+        with pytest.raises(duckdb.ConversionException, match="CTE 'ordered':"):
             run()
