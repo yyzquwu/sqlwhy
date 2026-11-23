@@ -1,0 +1,17 @@
+packages:
+  - git: https://github.com/fivetran/dbt_shopify_source.git
+    name: shopify_source
+    revision: dc5b7a64ccb979bdf55ac29e0c8ac488058cd376
+  - git: https://github.com/fivetran/dbt_fivetran_utils.git
+    name: fivetran_utils
+    revision: f5916f04ea29a9ce66620e2360fe470097593511
+  - name: spark_utils
+    package: dbt-labs/spark_utils
+    version: 0.3.5
+  - name: dbt_date
+    package: calogica/dbt_date
+    version: 0.7.2
+  - name: dbt_utils
+    package: dbt-labs/dbt_utils
+    version: 1.4.1
+sha1_hash: 3bc91c519c4a05e0c46eaebf680e9a5dc145eae5

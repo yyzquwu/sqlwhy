@@ -19,4 +19,4 @@ jobs:
       - run: sqlwhy demo
       - name: Require one report row per order
         working-directory: examples/audit
-        run: sqlwhy audit report.sql --table orders=orders.csv --table payments=payments.csv --key o.id --expect-rows 1
+        run: sqlwhy audit cte_report.sql --table orders=orders.csv --table payments=payments.csv --key o.id --expect-rows 1

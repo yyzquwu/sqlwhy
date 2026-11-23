@@ -2,17 +2,18 @@
 
 import math
 import re
+from dataclasses import dataclass
 from datetime import date, time
 
 import duckdb
 
-from .query import Query, needs_native_guard, parse_query
+from .chain import ChainStep, parse_chain
+from .query import _FOLD, Query, _projected_keys, needs_native_guard, parse_query
 
 _ID = r'(?:"(?:[^"]|"")+"|[^\W\d][\w$]*)'
 _KEY = re.compile(rf"(?:(?P<qual>{_ID})\s*\.\s*)?(?P<col>{_ID})")
 _TRUTH = ("TRUE", "FALSE", "UNKNOWN")
 _SAMPLE_LIMIT = 3
-_ASCII_LOWER = str.maketrans("ABCDEFGHIJKLMNOPQRSTUVWXYZ", "abcdefghijklmnopqrstuvwxyz")
 
 
 def _quote(ident: str) -> str:
@@ -29,27 +30,33 @@ def _key_column(plan: Query, key: str) -> str:
         raise ValueError("Use a source column name or a qualified source column as the key.")
     qualifier, col = match.groups()
     if qualifier:
-        name = _unquote(qualifier).translate(_ASCII_LOWER)
-        alias = plan.base_alias.translate(_ASCII_LOWER)
-        related = {ident.translate(_ASCII_LOWER) for ident in (plan.right_alias, plan.right_name) if ident}
-        if name != alias and (name != plan.base_name.translate(_ASCII_LOWER) or name in related):
+        name = _unquote(qualifier).translate(_FOLD)
+        alias = plan.base_alias.translate(_FOLD)
+        related = {ident.translate(_FOLD) for ident in (plan.right_alias, plan.right_name) if ident}
+        if name != alias and (name != plan.base_name.translate(_FOLD) or name in related):
             raise ValueError(f"The key must refer to the source table ({plan.base_alias}).")
     return f"{_quote(plan.base_alias)}.{_quote(_unquote(col))}"
 
 
-def _cte_name(label: str, plan: Query) -> str:
+def _cte_name(label: str, plan: Query, relations=()) -> str:
     name = f"__sqlwhy_{label}"
-    relations = {ident.lower() for ident in (plan.base_name, plan.right_name) if ident}
-    while name in relations:
+    reserved = {ident.translate(_FOLD) for ident in (plan.base_name, plan.right_name, *relations) if ident}
+    while name in reserved:
         name += "_"
     return name
 
 
-def _sample_columns(connection, plan):
+def _columns(connection, relation, prefix=""):
+    if relation is None:
+        return ()
+    return tuple(col[0] for col in connection.execute(f"{prefix}SELECT * FROM {relation} LIMIT 0").description)
+
+
+def _sample_columns(connection, plan, prefix):
     if not plan.where_columns:
         return [], {}
     names = ", ".join(plan.where_columns)
-    info = connection.execute(f"SELECT {names} FROM {plan.base_sql} {plan.join_sql or ''} LIMIT 0").description
+    info = connection.execute(f"{prefix}SELECT {names} FROM {plan.base_sql} {plan.join_sql or ''} LIMIT 0").description
     types = {col: row[1] for col, row in zip(plan.where_columns, info, strict=True)}
     bound_types = {col: str(kind) for col, kind in types.items()}
     # DuckDB's Python client discards UNION tags even when the tag determines
@@ -84,15 +91,16 @@ def _sample_type(kind):
     return kind
 
 
-def _scan(plan: Query, key: str, columns: list[str], native_only=False, null_key=False, text_inputs=()) -> tuple[str, int]:
+def _scan(plan: Query, key: str, columns: list[str], native_only=False, null_key=False, text_inputs=(),
+          prefix="", relations=()) -> tuple[str, int]:
     """Build a single read statement for counts and evidence from one snapshot."""
-    rows = _cte_name("rows", plan)
+    rows = _cte_name("rows", plan, relations)
     ctes, stats = [], []
     key_filter = f"WHERE {key} IS NULL" if null_key else f"WHERE {key} IS NOT DISTINCT FROM cast_to_type(?, {key})"
     args = 1
     if plan.join_sql:
-        source = _cte_name("source", plan)
-        unmatched = _cte_name("unmatched", plan)
+        source = _cte_name("source", plan, relations)
+        unmatched = _cte_name("unmatched", plan, relations)
         ctes.extend([
             f"{source} AS (SELECT 1 FROM {plan.base_sql} {key_filter})",
             f"{unmatched} AS (SELECT 1 FROM {plan.base_sql} ANTI JOIN {plan.right_sql}"
@@ -127,7 +135,8 @@ def _scan(plan: Query, key: str, columns: list[str], native_only=False, null_key
     ctes.append(
         f"{rows}{fields} AS (SELECT {select} FROM {plan.base_sql} {join}\n{key_filter})"
     )
-    return f"WITH {', '.join(ctes)} SELECT {', '.join(stats)} FROM {rows}", 0 if null_key else args
+    with_sql = f"{prefix}, " if prefix else "WITH "
+    return f"{with_sql}{', '.join(ctes)} SELECT {', '.join(stats)} FROM {rows}", 0 if null_key else args
 
 
 def _json(value):
@@ -203,16 +212,16 @@ def _where_stage(plan: Query, joined: int, stats: list) -> dict:
     }
 
 
-def _prepare_trace(connection, plan, key_col):
-    columns, types = _sample_columns(connection, plan)
+def _prepare_trace(connection, plan, key_col, prefix=""):
+    columns, types = _sample_columns(connection, plan, prefix)
     text_inputs = tuple(i for i, kind in enumerate(types.values()) if kind == "VARCHAR")
     return columns, needs_native_guard(plan.where_expr, types), text_inputs
 
 
-def _trace(connection, plan, key, key_col, value, prepared):
+def _trace_stages(connection, plan, key_col, value, prepared, prefix="", relations=()):
     columns, native_only, text_inputs = prepared
     statement, args = _scan(plan, key_col, columns, native_only=native_only, null_key=value is None,
-                            text_inputs=text_inputs)
+                            text_inputs=text_inputs, prefix=prefix, relations=relations)
     stats = connection.execute(statement, [value] * args).fetchone()
     source, unmatched, joined, *where = stats if plan.join_sql else (stats[0], 0, *stats)
     stages = [{
@@ -229,7 +238,11 @@ def _trace(connection, plan, key, key_col, value, prepared):
         if plan.where_columns and not columns:
             stage["detail"] += " Samples omitted because a predicate input contains a tagged UNION."
         stages.append(stage)
-    output = stages[-1]["after"]
+    return stages
+
+
+def _trace_result(key, value, stages):
+    source, output = stages[0]["after"], stages[-1]["after"]
     return {
         "status": "present" if output else "removed" if source else "source_absent",
         "target": {"key": key, "value": _json(value)},
@@ -238,8 +251,88 @@ def _trace(connection, plan, key, key_col, value, prepared):
     }
 
 
+def _trace(connection, plan, key, key_col, value, prepared):
+    return _trace_result(key, value, _trace_stages(connection, plan, key_col, value, prepared))
+
+
+@dataclass(frozen=True, slots=True)
+class _BoundChain:
+    steps: tuple[tuple[ChainStep, str], ...]
+    key_type: duckdb.sqltypes.DuckDBPyType
+    index: int
+    width: int
+    relations: tuple[str, ...]
+
+
+def _step_label(step):
+    return f"CTE {_quote(step.name)}" if step.name is not None else "Final SELECT"
+
+
+def _bind_chain(connection, steps, key):
+    """Track an unambiguous direct key through DuckDB's bound output names."""
+    bound = []
+    for step in steps:
+        plan, prefix = step.query, step.prefix_sql
+        try:
+            source_names = _columns(connection, plan.base_sql, prefix)
+            if bound:
+                if len(source_names) != len(report):
+                    raise ValueError("could not match source columns to the preceding CTE.")
+                # DuckDB may add suffixes to repeated names when binding a CTE as a table.
+                key_names = tuple(source_names[i] for i in indices)
+                key_col = f"{_quote(plan.base_alias)}.{_quote(key_names[0])}"
+            else:
+                key_col = _key_column(plan, key)
+                key_name, key_type = connection.execute(
+                    f"SELECT {key_col} FROM {plan.base_sql} LIMIT 0"
+                ).description[0][:2]
+                if key_name.translate(_FOLD) not in {name.translate(_FOLD) for name in source_names}:
+                    raise ValueError("requires a key column exposed by its source.")
+                key_names = (key_name,)
+            report = connection.execute(f"DESCRIBE {step.statement_sql}").fetchall()
+            indices = _projected_keys(plan, key_names, source_names, _columns(connection, plan.right_sql, prefix),
+                                      [column[0] for column in report])
+            if any(report[i][1] != str(key_type) for i in indices):
+                raise ValueError("requires the projected source key to keep its original type.")
+        except ValueError as err:
+            raise ValueError(f"{_step_label(step)} {str(err).removeprefix('Audit ')}") from err
+        except (duckdb.BinderException, duckdb.CatalogException, duckdb.ParserException) as err:
+            raise type(err)(f"{_step_label(step)}: {err}") from err
+        bound.append((step, key_col))
+
+    relations = tuple(name for step in steps for name in (step.name, step.query.base_name, step.query.right_name)
+                      if name is not None)
+    return _BoundChain(tuple(bound), key_type, indices[0], len(report), relations)
+
+
+def _prepare_chain_trace(connection, chain):
+    return [_prepare_trace(connection, step.query, key_col, step.prefix_sql) for step, key_col in chain.steps]
+
+
+def _trace_chain(connection, chain, key, value, prepared):
+    stages = []
+    for (step, key_col), evidence in zip(chain.steps, prepared, strict=True):
+        try:
+            run = _trace_stages(connection, step.query, key_col, value, evidence, step.prefix_sql, chain.relations)
+        except duckdb.Error as err:
+            raise type(err)(f"{_step_label(step)}: {err}") from err
+        if stages:
+            if run[0]["after"] != stages[-1]["after"]:
+                raise ValueError(f"{_step_label(step)} source count could not be matched to the previous step.")
+            run = run[1:]
+        stages.extend({**stage, "cte": step.name} for stage in run)
+    return _trace_result(key, value, stages)
+
+
 def trace_row(connection, sql: str, key: str, value) -> dict:
-    """Return source, join, and filter evidence for all rows with the source key."""
+    """Return source, join, and filter evidence for all rows with the source key.
+
+    Use a DuckDB transaction if concurrent writes could change data between CTE steps.
+    """
+    steps = parse_chain(sql)
+    if steps is not None:
+        chain = _bind_chain(connection, steps, key)
+        return _trace_chain(connection, chain, key, value, _prepare_chain_trace(connection, chain))
     plan = parse_query(sql)
     key_col = _key_column(plan, key)
     connection.execute(f"EXPLAIN {plan.sql}")

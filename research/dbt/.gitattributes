@@ -1,0 +1,3 @@
+# Preserve dbt's byte-for-byte Windows output and the pinned upstream seed.
+compiled/*.sql -text -whitespace
+raw_orders.csv -text -whitespace

@@ -26,12 +26,22 @@ DEMOS = {
         LEFT JOIN payments AS p ON o.id = p.order_id
         WHERE p.status = 'settled'""",
     ),
+    "cte-audit": (
+        "Find the two CTEs that duplicate or remove orders.",
+        """WITH orders_with_payments AS (
+            SELECT o.id AS order_id, p.status FROM orders AS o
+            LEFT JOIN payments AS p ON p.order_id = o.id
+        ), settled_orders AS (
+            SELECT order_id FROM orders_with_payments WHERE status = 'settled'
+        )
+        SELECT order_id FROM settled_orders""",
+    ),
 }
 
 
 def open_demo(name="left-join-null"):
     con = duckdb.connect(config=SAFE_CONFIG)
-    if name == "flat-counts":
+    if name in ("flat-counts", "cte-audit"):
         con.execute("""
             CREATE TABLE orders (id INTEGER);
             INSERT INTO orders VALUES (41), (42);

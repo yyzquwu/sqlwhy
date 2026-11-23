@@ -93,6 +93,9 @@ def report():
         "the local before and after queries directly in DuckDB on synthetic data. "
         "The trace columns show a separate run of sqlwhy on each local query.",
         "",
+        "The original study tested raw dbt templates. The [v0.4 follow-up](dbt/README.md) "
+        "compiles all four pinned models and checks their full SQL.",
+        "",
         "| Fix | Original pre-fix source | Local replay | Rows for key, before → fixed | Before trace | Fixed trace |",
         "| --- | --- | --- | --- | --- | --- |",
     ]

@@ -2,6 +2,8 @@
 
 Replay with `python research/replay.py` from a checkout with sqlwhy installed. Each source link identifies an upstream fix. The two row counts come from executing the local before and after queries directly in DuckDB on synthetic data. The trace columns show a separate run of sqlwhy on each local query.
 
+The original study tested raw dbt templates. The [v0.4 follow-up](dbt/README.md) compiles all four pinned models and checks their full SQL.
+
 | Fix | Original pre-fix source | Local replay | Rows for key, before → fixed | Before trace | Fixed trace |
 | --- | --- | --- | --- | --- | --- |
 | [a1](https://github.com/fivetran/dbt_quickbooks/pull/123) QuickBooks invoice payments joined across source relations | raw dbt template rejected (compiled SQL untested) | reduced | 2 → 1 | JOIN 1 → 2 | No stage changed the key count |

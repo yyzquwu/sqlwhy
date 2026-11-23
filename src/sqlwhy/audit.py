@@ -1,6 +1,10 @@
 """Audit the report row count for every distinct left-source key in DuckDB."""
 
-from .engine import _cte_name, _key_column, _prepare_trace, _trace
+from .chain import parse_chain
+from .engine import (
+    _bind_chain, _columns, _cte_name, _key_column, _prepare_chain_trace, _prepare_trace, _step_label,
+    _trace, _trace_chain,
+)
 from .query import _FOLD, parse_query, projected_key
 
 _KEY_TYPES = {
@@ -11,22 +15,16 @@ _KEY_TYPES = {
 _BIGINT_MAX = 2**63 - 1
 
 
-def _columns(connection, table):
-    if table is None:
-        return ()
-    return tuple(col[0] for col in connection.execute(f"SELECT * FROM {table} LIMIT 0").description)
-
-
-def _audit_sql(plan, key_col, index, width, text_key):
-    report = _cte_name("report", plan)
-    counts = _cte_name("counts", plan)
-    totals = _cte_name("totals", plan)
+def _audit_sql(plan, key_col, index, width, text_key, statement_sql=None, relations=()):
+    report = _cte_name("report", plan, relations)
+    counts = _cte_name("counts", plan, relations)
+    totals = _cte_name("totals", plan, relations)
     columns = ", ".join(f"c{i}" for i in range(width))
     sample = "decode(min(encode(k)) FILTER (WHERE is_source))" if text_key else "k"
     # The column counts force DuckDB to evaluate the original projection, including fallible casts.
     return f"""
         WITH {report}({columns}) AS MATERIALIZED (
-            {plan.statement_sql}
+            {statement_sql or plan.statement_sql}
         ), {counts} AS (
             SELECT k, {sample} AS sample_value,
                    count(*) FILTER (WHERE is_source) AS source_rows,
@@ -64,22 +62,31 @@ def audit_rows(connection, sql: str, key: str, expected_rows: int, limit: int = 
         if isinstance(value, bool) or not isinstance(value, int) or value < 0:
             raise ValueError(f"{label} must be a nonnegative integer.")
 
-    plan = parse_query(sql)
-    key_col = _key_column(plan, key)
-    meta = connection.execute(f"SELECT {key_col} FROM {plan.base_sql} LIMIT 0").description[0]
-    key_name, key_type = meta[:2]
-    source_names = _columns(connection, plan.base_sql)
-    if key_name.translate(_FOLD) not in {name.translate(_FOLD) for name in source_names}:
-        raise ValueError("Audit requires a key column exposed by the source table.")
-    if key_type.id not in _KEY_TYPES:
-        raise ValueError(f"Audit does not support key type {key_type}.")
+    steps = parse_chain(sql)
+    if steps is not None:
+        chain = _bind_chain(connection, steps, key)
+        base, key_col = chain.steps[0]
+        key_type = chain.key_type
+        if key_type.id not in _KEY_TYPES:
+            raise ValueError(f"{_step_label(base)}: Audit does not support key type {key_type}.")
+        statement = _audit_sql(base.query, key_col, chain.index, chain.width, key_type.id == "varchar",
+                               steps[-1].statement_sql, chain.relations)
+    else:
+        plan = parse_query(sql)
+        key_col = _key_column(plan, key)
+        key_name, key_type = connection.execute(f"SELECT {key_col} FROM {plan.base_sql} LIMIT 0").description[0][:2]
+        source_names = _columns(connection, plan.base_sql)
+        if key_name.translate(_FOLD) not in {name.translate(_FOLD) for name in source_names}:
+            raise ValueError("Audit requires a key column exposed by the source table.")
+        if key_type.id not in _KEY_TYPES:
+            raise ValueError(f"Audit does not support key type {key_type}.")
 
-    report = connection.execute(f"DESCRIBE {plan.statement_sql}").fetchall()
-    index = projected_key(plan, key_name, source_names,
-                          _columns(connection, plan.right_sql), [col[0] for col in report])
-    if report[index][1] != str(key_type):
-        raise ValueError("Audit requires the projected source key to keep its original type.")
-    statement = _audit_sql(plan, key_col, index, len(report), key_type.id == "varchar")
+        report = connection.execute(f"DESCRIBE {plan.statement_sql}").fetchall()
+        index = projected_key(plan, key_name, source_names,
+                              _columns(connection, plan.right_sql), [col[0] for col in report])
+        if report[index][1] != str(key_type):
+            raise ValueError("Audit requires the projected source key to keep its original type.")
+        statement = _audit_sql(plan, key_col, index, len(report), key_type.id == "varchar")
     expected = min(expected_rows, _BIGINT_MAX + 1)
     stats = connection.execute(statement, [expected, min(limit, _BIGINT_MAX), expected]).fetchone()
     source_rows, source_keys, violation_count, matched, samples, report_rows, *_ = stats
@@ -88,9 +95,12 @@ def audit_rows(connection, sql: str, key: str, expected_rows: int, limit: int = 
 
     examples = []
     if samples:
-        prepared = _prepare_trace(connection, plan, key_col)
+        prepared = (_prepare_chain_trace(connection, chain) if steps is not None
+                    else _prepare_trace(connection, plan, key_col))
         for sample in samples:
-            trace = _trace(connection, plan, key, key_col, sample["value"], prepared)
+            value = sample["value"]
+            trace = (_trace_chain(connection, chain, key, value, prepared) if steps is not None
+                     else _trace(connection, plan, key, key_col, value, prepared))
             if (trace["output_rows"], trace["stages"][0]["after"]) != (sample["output_rows"], sample["source_rows"]):
                 raise ValueError("Audit example counts changed or could not be reproduced by the trace.")
             examples.append(trace)

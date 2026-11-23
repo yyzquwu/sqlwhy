@@ -1,0 +1,14 @@
+packages:
+  - name: zendesk_source
+    package: fivetran/zendesk_source
+    version: 0.15.0
+  - name: fivetran_utils
+    package: fivetran/fivetran_utils
+    version: 0.4.14
+  - name: spark_utils
+    package: dbt-labs/spark_utils
+    version: 0.3.5
+  - name: dbt_utils
+    package: dbt-labs/dbt_utils
+    version: 1.4.1
+sha1_hash: 56dd08a5136b6e80554b20b808113ed1465f7435

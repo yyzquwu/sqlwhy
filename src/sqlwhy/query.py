@@ -41,6 +41,8 @@ class Query:
     where_sql: str | None
     where_columns: tuple[str, ...]
     where_expr: exp.Expr | None
+    base_qualified: bool = False
+    right_qualified: bool = False
 
 
 def _render(node: exp.Expr) -> str:
@@ -208,26 +210,31 @@ def parse_query(sql: str) -> Query:
         right_sql=right_sql, right_alias=right.alias_or_name if right else None,
         right_name=right.name if right else None, join_kind=kind, on_sql=on_sql,
         where_sql=where_sql, where_columns=where_columns, where_expr=where.this if where else None,
+        base_qualified=len(base.parts) > 1, right_qualified=right is not None and len(right.parts) > 1,
     )
 
 
 def projected_key(plan: Query, key_name: str, source_names, right_names, output_names) -> int:
-    """Find the ordinal of a unique, direct projection of the left-source key."""
-    key = key_name.translate(_FOLD)
+    """Find the first unambiguous direct projection of the left-source key."""
+    return _projected_keys(plan, (key_name,), source_names, right_names, output_names)[0]
+
+
+def _projected_keys(plan: Query, key_names, source_names, right_names, output_names) -> tuple[int, ...]:
+    keys = {name.translate(_FOLD) for name in key_names}
     base = plan.base_alias.translate(_FOLD)
     origins = []
     for proj in plan.projections:
         expr = _unparen(proj.this if isinstance(proj, exp.Alias) else proj)
         if isinstance(expr, exp.Star):
-            origins.extend(name.translate(_FOLD) == key for name in source_names)
+            origins.extend(name.translate(_FOLD) in keys for name in source_names)
             origins.extend(False for _ in right_names)
         elif isinstance(expr, exp.Column) and isinstance(expr.this, exp.Star):
             if expr.table.translate(_FOLD) == base:
-                origins.extend(name.translate(_FOLD) == key for name in source_names)
+                origins.extend(name.translate(_FOLD) in keys for name in source_names)
             else:
                 origins.extend(False for _ in right_names)
         else:
-            origins.append(isinstance(expr, exp.Column) and expr.name.translate(_FOLD) == key
+            origins.append(isinstance(expr, exp.Column) and expr.name.translate(_FOLD) in keys
                            and (not expr.table or expr.table.translate(_FOLD) == base))
 
     if len(origins) != len(output_names):
@@ -237,10 +244,10 @@ def projected_key(plan: Query, key_name: str, source_names, right_names, output_
         raise ValueError("Audit requires the source key to be projected directly in SELECT.")
     names = [name.translate(_FOLD) for name in output_names]
     counts = Counter(names)
-    for index in matches:
-        if counts[names[index]] == 1:
-            return index
-    raise ValueError("Audit found an ambiguous projected source key. Give a direct key projection a unique name.")
+    unique = tuple(i for i in matches if counts[names[i]] == 1)
+    if not unique:
+        raise ValueError("Audit found an ambiguous projected source key. Give a direct key projection a unique name.")
+    return unique
 
 
 def needs_native_guard(expr, types):

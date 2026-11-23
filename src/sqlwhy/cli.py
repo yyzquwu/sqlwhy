@@ -48,7 +48,7 @@ def _parser(command):
         "  sqlwhy report.sql --db audit.duckdb --trace orders.id=42\n"
         "  sqlwhy report.sql --table orders=orders.csv --trace orders.id=42\n"
         "  sqlwhy audit report.sql --db audit.duckdb --key orders.id --expect-rows 1\n"
-        "  sqlwhy demo flat-counts --json\n\n"
+        "  sqlwhy demo cte-audit\n\n"
     )
     parser = argparse.ArgumentParser(
         prog=f"sqlwhy {command}" if command else "sqlwhy",
@@ -91,11 +91,17 @@ def _literal(value):
     return "NULL" if value is None else json.dumps(value, ensure_ascii=False, default=str)
 
 
+def _clause(stage):
+    if "cte" in stage:
+        return f"[{stage['cte'] if stage['cte'] is not None else 'final SELECT'}] {stage['clause']}"
+    return stage["clause"]
+
+
 def _show_stage(stage):
     count = str(stage["after"])
     if stage["before"] is not None:
         count = f"{stage['before']} -> {count}"
-    print(f"  {stage['clause']}  [{count}]")
+    print(f"  {_clause(stage)}  [{count}]")
     print(f"    {stage['detail']}")
     for sample in stage.get("samples", ()):
         inputs = ", ".join(f"{key} = {_literal(val)}" for key, val in sample["inputs"].items())
@@ -133,7 +139,7 @@ def _show_audit(result):
         source, *stages = trace["stages"]
         print(f"\n{target['key']} = {_literal(target['value'])}  [expected {expected}, got {trace['output_rows']}]")
         if source["after"] != expected:
-            print(f"  {source['clause']}  [source count already differs: {source['after']}]")
+            print(f"  {_clause(source)}  [source count already differs: {source['after']}]")
         for stage in stages:
             if stage["before"] == stage["after"]:
                 continue
@@ -141,7 +147,7 @@ def _show_audit(result):
             if truth := stage.get("truth_counts"):
                 detail = (f"  {truth['UNCLASSIFIED']} unclassified" if "UNCLASSIFIED" in truth else
                           f"  FALSE {truth['FALSE']}, UNKNOWN {truth['UNKNOWN']} (SQL NULL)")
-            print(f"  {stage['clause']}  [{stage['before']} -> {stage['after']}]{detail}")
+            print(f"  {_clause(stage)}  [{stage['before']} -> {stage['after']}]{detail}")
 
 
 def main(argv=None):
@@ -155,6 +161,9 @@ def main(argv=None):
     parser = _parser(command)
     args = parser.parse_args(argv[1:] if command else argv)
     flat = demo and args.name == "flat-counts"
+    cte_demo = demo and args.name == "cte-audit"
+    if cte_demo and args.expect:
+        parser.error("cte-audit checks all keys. Use --expect-rows for a per-key count.")
     if flat and (args.expect is not None or args.expect_rows is not None):
         parser.error("flat-counts traces two orders. Use --expect and --expect-rows with a single trace.")
     try:
@@ -165,26 +174,28 @@ def main(argv=None):
             sql = args.sql_file.read_text(encoding="utf-8-sig")
             con = _open_db(args.db) if args.db else open_tables(args.table)
         with con:
-            if audit:
-                con.execute("BEGIN TRANSACTION READ ONLY")
-                result = audit_rows(con, sql, args.key, args.expect_rows, limit=args.limit)
-                con.commit()
+            con.execute("BEGIN TRANSACTION READ ONLY")
+            if audit or cte_demo:
+                result = audit_rows(con, sql, "o.id" if cte_demo else args.key,
+                                    1 if args.expect_rows is None else args.expect_rows,
+                                    limit=5 if cte_demo else args.limit)
             elif flat:
                 result = trace_flat_counts(con)
             else:
                 key, value = ("o.id", 42) if demo else args.trace
                 result = trace_row(con, sql, key, value)
+            con.commit()
     except (OSError, ValueError, duckdb.Error) as err:
         parser.error(str(err))
     if args.json:
         print(json.dumps(result, indent=2, default=str))
-    elif audit:
+    elif audit or cte_demo:
         _show_audit(result)
     elif flat:
         _show_flat_counts(result)
     else:
         _show(result)
-    if audit:
+    if audit or cte_demo:
         return int(result["violation_count"] > 0)
     code = 0
     if args.expect and args.expect != result["status"]:
