@@ -8,6 +8,7 @@ import duckdb
 
 from .audit import audit_rows
 from .demo import DEMOS, open_demo, trace_flat_counts
+from .diff import diff_rows
 from .engine import trace_row
 from .files import SAFE_CONFIG, open_tables
 
@@ -40,7 +41,24 @@ def _nonnegative_int(raw):
     return count
 
 
+def _inputs(parser):
+    inputs = parser.add_mutually_exclusive_group(required=True)
+    inputs.add_argument("--db", type=Path, help="existing DuckDB file opened read-only")
+    inputs.add_argument("--table", action="append", metavar="NAME=FILE",
+                        help="local CSV or Parquet file to load as NAME (repeatable)")
+
+
 def _parser(command):
+    if command == "diff":
+        parser = argparse.ArgumentParser(prog="sqlwhy diff", description="Compare two outputs by key multiplicity.")
+        parser.add_argument("before", help="baseline table or view")
+        parser.add_argument("after", help="candidate table or view")
+        _inputs(parser)
+        parser.add_argument("--key", required=True, help="baseline key column (same name on both sides by default)")
+        parser.add_argument("--after-key", help="candidate key column if renamed")
+        parser.add_argument("--limit", type=_nonnegative_int, default=5, help="maximum examples (default: 5)")
+        parser.add_argument("--json", action="store_true", help="print the result as JSON")
+        return parser
     demo, audit = command == "demo", command == "audit"
     names = "\n".join(f"  {name:<16} {description}" for name, (description, _) in DEMOS.items())
     examples = (
@@ -48,6 +66,7 @@ def _parser(command):
         "  sqlwhy report.sql --db audit.duckdb --trace orders.id=42\n"
         "  sqlwhy report.sql --table orders=orders.csv --trace orders.id=42\n"
         "  sqlwhy audit report.sql --db audit.duckdb --key orders.id --expect-rows 1\n"
+        "  sqlwhy diff previous_orders current_orders --key order_id --db audit.duckdb\n"
         "  sqlwhy demo cte-audit\n\n"
     )
     parser = argparse.ArgumentParser(
@@ -62,10 +81,7 @@ def _parser(command):
         parser.add_argument("name", nargs="?", choices=DEMOS, default="left-join-null")
     else:
         parser.add_argument("sql_file", metavar="QUERY.sql", type=Path, help="UTF-8 SQL file")
-        inputs = parser.add_mutually_exclusive_group(required=True)
-        inputs.add_argument("--db", type=Path, help="existing DuckDB file opened read-only")
-        inputs.add_argument("--table", action="append", metavar="NAME=FILE",
-                            help="local CSV or Parquet file to load as NAME (repeatable)")
+        _inputs(parser)
         if audit:
             parser.add_argument("--key", required=True, metavar="COLUMN", help="key column on the leftmost table")
         else:
@@ -153,13 +169,21 @@ def _show_audit(result):
             print(f"  {_clause(stage)}  [{stage['before']} -> {stage['after']}]{detail}")
 
 
+def _show_diff(result):
+    print(f"Report rows {result['before_rows']} -> {result['after_rows']}  |  Changed keys {result['changed_keys']}")
+    print(f"Added {result['added_keys']}  |  Removed {result['removed_keys']}  |  "
+          f"Increased {result['increased_keys']}  |  Decreased {result['decreased_keys']}")
+    for ex in result["examples"]:
+        print(f"  {_literal(ex['key'])}  [{ex['before_rows']} -> {ex['after_rows']}]")
+
+
 def main(argv=None):
     if argv is None:
         for stream in (sys.stdout, sys.stderr):
             if getattr(stream, "reconfigure", None):
                 stream.reconfigure(errors="backslashreplace")
         argv = sys.argv[1:]
-    command = argv[0] if argv and argv[0] in ("demo", "audit") else None
+    command = argv[0] if argv and argv[0] in ("demo", "audit", "diff") else None
     demo, audit = command == "demo", command == "audit"
     parser = _parser(command)
     args = parser.parse_args(argv[1:] if command else argv)
@@ -176,11 +200,14 @@ def main(argv=None):
             sql = DEMOS[args.name][1]
             con = open_demo(args.name)
         else:
-            sql = args.sql_file.read_text(encoding="utf-8-sig")
+            if command != "diff":
+                sql = args.sql_file.read_text(encoding="utf-8-sig")
             con = _open_db(args.db) if args.db else open_tables(args.table)
         with con:
             con.execute("BEGIN TRANSACTION READ ONLY")
-            if audit or cte_demo:
+            if command == "diff":
+                result = diff_rows(con, args.before, args.after, args.key, after_key=args.after_key, limit=args.limit)
+            elif audit or cte_demo:
                 result = audit_rows(con, sql, "o.id" if cte_demo else args.key,
                                     1 if args.expect_rows is None else args.expect_rows,
                                     limit=5 if args.limit is None else args.limit)
@@ -194,12 +221,16 @@ def main(argv=None):
         parser.error(str(err))
     if args.json:
         print(json.dumps(result, indent=2, default=str))
+    elif command == "diff":
+        _show_diff(result)
     elif audit or cte_demo:
         _show_audit(result)
     elif flat:
         _show_flat_counts(result)
     else:
         _show(result)
+    if command == "diff":
+        return int(result["changed_keys"] > 0)
     if audit or cte_demo:
         return int(result["violation_count"] > 0)
     code = 0

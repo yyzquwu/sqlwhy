@@ -34,6 +34,18 @@ The report should include each order, even if it is awaiting payment. The first 
 
 ## Audit your own query
 
+### Compare saved report outputs
+
+When a pull request changes a report, compare the base and candidate outputs built from the same input snapshot. The two inputs can be DuckDB tables or views, or named CSV or Parquet files. From the checkout root, this example reports two changed keys despite equal totals:
+
+```sh
+sqlwhy diff old new --table old=examples/orders.csv --table new=examples/payments_fanout.csv --key id --after-key order_id
+```
+
+Order 41 gains a row and order 42 disappears. Use `--db warehouse.duckdb` for database relations, `--limit 0` for totals, and `--json` for CI. Exit 1 means at least one key changed multiplicity. Exit 0 means every key had the same number of rows, and exit 2 means the comparison could not run. NULL forms one key. Text keys are compared by exact UTF-8 bytes and both key columns must have the same supported DuckDB type. Use audit or trace on a supported source query when you need to locate the responsible clause.
+
+### Check a required count
+
 ```sh
 sqlwhy audit report.sql --db warehouse.duckdb --key o.id --expect-rows 1
 ```
